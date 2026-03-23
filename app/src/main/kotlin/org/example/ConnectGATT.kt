@@ -16,8 +16,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -37,17 +41,34 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlin.random.Random
 
+@OptIn(ExperimentalMaterial3Api::class)
 @SuppressLint("MissingPermission")
 @Composable
 fun BLEApp() {
     BluetoothPermissionBox {
         var selectedDevice by remember { mutableStateOf<BluetoothDevice?>(null) }
 
-        AnimatedContent(targetState = selectedDevice, label = "device") { device ->
-            if (device == null) {
-                FindDevicesScreen { selectedDevice = it }
-            } else {
-                ConnectDeviceScreen(device) { selectedDevice = null }
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("BLE Scanner") },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        titleContentColor = MaterialTheme.colorScheme.onSurface,
+                    ),
+                )
+            },
+        ) { innerPadding ->
+            AnimatedContent(
+                targetState = selectedDevice,
+                label = "device",
+                modifier = Modifier.padding(innerPadding),
+            ) { device ->
+                if (device == null) {
+                    FindDevicesScreen { selectedDevice = it }
+                } else {
+                    ConnectDeviceScreen(device) { selectedDevice = null }
+                }
             }
         }
     }
