@@ -5,7 +5,6 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -30,17 +29,10 @@ import androidx.core.content.ContextCompat
 fun BluetoothPermissionBox(content: @Composable () -> Unit) {
     val context = LocalContext.current
 
-    val permissions = buildList {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            add(Manifest.permission.BLUETOOTH_SCAN)
-            add(Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            add(Manifest.permission.BLUETOOTH)
-            add(Manifest.permission.BLUETOOTH_ADMIN)
-            add(Manifest.permission.ACCESS_FINE_LOCATION)
-            add(Manifest.permission.ACCESS_COARSE_LOCATION)
-        }
-    }
+    val permissions = listOf(
+        Manifest.permission.BLUETOOTH_SCAN,
+        Manifest.permission.BLUETOOTH_CONNECT,
+    )
 
     var permissionsGranted by remember {
         mutableStateOf(

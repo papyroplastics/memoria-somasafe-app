@@ -7,7 +7,6 @@ import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothProfile
-import android.os.Build
 import android.util.Log
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.layout.Arrangement
@@ -126,19 +125,11 @@ private fun writeCharacteristic(
     characteristic: BluetoothGattCharacteristic,
 ) {
     val data = "Hello from template app!".toByteArray()
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        gatt.writeCharacteristic(
-            characteristic,
-            data,
-            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT,
-        )
-    } else {
-        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        @Suppress("DEPRECATION")
-        characteristic.value = data
-        @Suppress("DEPRECATION")
-        gatt.writeCharacteristic(characteristic)
-    }
+    gatt.writeCharacteristic(
+        characteristic,
+        data,
+        BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT,
+    )
 }
 
 private data class GattState(
@@ -201,17 +192,6 @@ private fun BLEConnectEffect(
             ) {
                 state = state.copy(messageSent = status == BluetoothGatt.GATT_SUCCESS)
                 currentOnStateChange(state)
-            }
-
-            @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-            override fun onCharacteristicRead(
-                gatt: BluetoothGatt,
-                characteristic: BluetoothGattCharacteristic,
-                status: Int,
-            ) {
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-                    handleRead(characteristic.value)
-                }
             }
 
             override fun onCharacteristicRead(
