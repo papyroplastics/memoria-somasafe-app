@@ -1,11 +1,17 @@
 package org.example
 
-import android.app.Activity
 import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.material3.MaterialTheme
 
-class App : Activity() {
+class App : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        greet("Android")
+        setContent {
+            MaterialTheme {
+                BLEApp()
+            }
+        }
     }
 }
