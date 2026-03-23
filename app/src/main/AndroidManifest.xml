@@ -15,7 +15,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Main">
 
-        <activity android:name="org.example.App"
+        <activity android:name="app.somasafe.App"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

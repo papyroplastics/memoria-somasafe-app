@@ -1,4 +1,4 @@
-package org.example
+package app.somasafe
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity

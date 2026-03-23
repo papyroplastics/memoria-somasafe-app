@@ -1,4 +1,4 @@
-package org.example
+package app.somasafe
 
 import android.Manifest
 import android.bluetooth.BluetoothAdapter

@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "org.example.template"
+    namespace = "app.somasafe"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "org.example.template"
+        applicationId = "app.somasafe"
         minSdk = 34
         targetSdk = 35
         versionCode = 1

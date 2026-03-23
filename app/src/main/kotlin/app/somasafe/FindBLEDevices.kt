@@ -1,4 +1,4 @@
-package org.example
+package app.somasafe
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
