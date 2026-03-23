@@ -10,7 +10,8 @@
     <application
         android:allowBackup="true"
         android:label="Template"
-        android:supportsRtl="true">
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Template">
 
         <activity android:name="org.example.App"
             android:exported="true">

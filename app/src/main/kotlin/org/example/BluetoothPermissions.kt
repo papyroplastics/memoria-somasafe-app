@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -51,9 +52,11 @@ fun BluetoothPermissionBox(content: @Composable () -> Unit) {
     if (permissionsGranted) {
         BluetoothEnabledGate(content)
     } else {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Button(onClick = { launcher.launch(permissions.toTypedArray()) }) {
-                Text("Grant Bluetooth Permissions")
+        Surface(Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Button(onClick = { launcher.launch(permissions.toTypedArray()) }) {
+                    Text("Grant Bluetooth Permissions")
+                }
             }
         }
     }
@@ -65,8 +68,10 @@ private fun BluetoothEnabledGate(content: @Composable () -> Unit) {
     val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter
 
     if (adapter == null) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Bluetooth not available", color = MaterialTheme.colorScheme.error)
+        Surface(Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("Bluetooth not available", color = MaterialTheme.colorScheme.error)
+            }
         }
         return
     }
@@ -83,14 +88,16 @@ private fun BluetoothEnabledGate(content: @Composable () -> Unit) {
                 btEnabled = true
             }
         }
-        Column(
-            Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
-        ) {
-            Text("Bluetooth is disabled")
-            Button(onClick = { enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)) }) {
-                Text("Enable Bluetooth")
+        Surface(Modifier.fillMaxSize()) {
+            Column(
+                Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
+            ) {
+                Text("Bluetooth is disabled")
+                Button(onClick = { enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)) }) {
+                    Text("Enable Bluetooth")
+                }
             }
         }
     }
