@@ -37,11 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.LifecycleOwner
 import kotlinx.coroutines.delay
 
 @SuppressLint("MissingPermission")
@@ -148,7 +144,6 @@ private fun DeviceItem(device: BluetoothDevice, onClick: () -> Unit) {
 @Composable
 private fun BLEScanEffect(
     scanSettings: ScanSettings,
-    lifecycleOwner: LifecycleOwner = LocalLifecycleOwner.current,
     onScanFailed: (Int) -> Unit,
     onDeviceFound: (ScanResult) -> Unit,
 ) {
@@ -161,7 +156,7 @@ private fun BLEScanEffect(
 
     val currentOnDeviceFound by rememberUpdatedState(onDeviceFound)
 
-    DisposableEffect(lifecycleOwner, scanSettings) {
+    DisposableEffect(scanSettings) {
         val callback = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 currentOnDeviceFound(result)
@@ -172,18 +167,9 @@ private fun BLEScanEffect(
             }
         }
 
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_START) {
-                adapter.bluetoothLeScanner?.startScan(null, scanSettings, callback)
-            } else if (event == Lifecycle.Event.ON_STOP) {
-                adapter.bluetoothLeScanner?.stopScan(callback)
-            }
-        }
-
-        lifecycleOwner.lifecycle.addObserver(observer)
+        adapter.bluetoothLeScanner?.startScan(null, scanSettings, callback)
 
         onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
             adapter.bluetoothLeScanner?.stopScan(callback)
         }
     }
