@@ -9,9 +9,11 @@
 
     <application
         android:allowBackup="true"
-        android:label="Template"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="SomaSafe"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Template">
+        android:theme="@style/Theme.Main">
 
         <activity android:name="org.example.App"
             android:exported="true">

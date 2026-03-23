@@ -77,6 +77,7 @@ fun BLEApp() {
 @SuppressLint("MissingPermission")
 @Composable
 private fun ConnectDeviceScreen(device: BluetoothDevice, onClose: () -> Unit) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     var state by remember(device) { mutableStateOf(GattState.Empty) }
@@ -123,7 +124,7 @@ private fun ConnectDeviceScreen(device: BluetoothDevice, onClose: () -> Unit) {
             enabled = state.gatt != null && firstCharacteristic != null,
             onClick = {
                 scope.launch(Dispatchers.IO) {
-                    writeCharacteristic(state.gatt!!, firstCharacteristic!!)
+                    writeCharacteristic(context, state.gatt!!, firstCharacteristic!!)
                 }
             },
         ) { Text("Write to Device") }
@@ -142,10 +143,12 @@ private fun ConnectDeviceScreen(device: BluetoothDevice, onClose: () -> Unit) {
 }
 
 private fun writeCharacteristic(
+    context: android.content.Context,
     gatt: BluetoothGatt,
     characteristic: BluetoothGattCharacteristic,
 ) {
-    val data = "Hello from template app!".toByteArray()
+    val appName = context.applicationInfo.loadLabel(context.packageManager)
+    val data = "Hello from $appName!".toByteArray()
     gatt.writeCharacteristic(
         characteristic,
         data,
