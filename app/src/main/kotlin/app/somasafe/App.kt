@@ -12,24 +12,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
 
 class App : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContent {
-            AppTheme {
-                BLEApp()
-            }
-        }
+  override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+    enableEdgeToEdge()
+    setContent {
+      AppTheme {
+        BLEApp()
+      }
     }
+  }
 }
 
 @Composable
 private fun AppTheme(content: @Composable () -> Unit) {
-    val context = LocalContext.current
-    val colorScheme = if (isSystemInDarkTheme()) {
-        dynamicDarkColorScheme(context)
-    } else {
-        dynamicLightColorScheme(context)
-    }
-    MaterialTheme(colorScheme = colorScheme, content = content)
+  val context = LocalContext.current
+  val colorScheme = if (isSystemInDarkTheme()) {
+    dynamicDarkColorScheme(context)
+  } else {
+    dynamicLightColorScheme(context)
+  }
+  MaterialTheme(colorScheme = colorScheme, content = content)
 }
