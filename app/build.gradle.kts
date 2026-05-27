@@ -14,6 +14,27 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
+
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+
+        externalNativeBuild {
+            cmake {
+                targets("somasafe_ml")
+                arguments(
+                    "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+                    "-DLITERT_PLATFORM_DIR=android_arm64",
+                    "-DLITERT_ACCELERATOR_NAME=libLiteRtClGlAccelerator.so",
+                )
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
     }
 
     compileOptions {
