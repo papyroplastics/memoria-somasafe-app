@@ -17,7 +17,7 @@ class App : ComponentActivity() {
     enableEdgeToEdge()
     setContent {
       AppTheme {
-        BLEApp()
+        MainScreen()
       }
     }
   }

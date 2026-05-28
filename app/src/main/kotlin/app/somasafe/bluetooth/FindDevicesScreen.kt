@@ -1,4 +1,4 @@
-package app.somasafe
+package app.somasafe.bluetooth
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
@@ -48,7 +48,7 @@ private val ML_SERVICE_UUID = UUID.fromString("a4523840-7543-2492-fe43-b7dad4432
 
 @SuppressLint("MissingPermission")
 @Composable
-fun FindDevicesScreen(onDeviceSelected: (BluetoothDevice) -> Unit) {
+fun FindDevicesScreen(modifier: Modifier = Modifier, onDeviceSelected: (BluetoothDevice) -> Unit) {
   val context = LocalContext.current
   val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter ?: return
 
@@ -83,7 +83,7 @@ fun FindDevicesScreen(onDeviceSelected: (BluetoothDevice) -> Unit) {
   }
 
   LazyColumn(
-    modifier = Modifier
+    modifier = modifier
     .fillMaxSize()
     .padding(16.dp),
     verticalArrangement = Arrangement.spacedBy(8.dp),

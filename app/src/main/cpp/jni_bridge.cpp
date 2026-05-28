@@ -8,6 +8,7 @@
 
 #include "signatures.h"
 #include "utils.h"
+#include "introspect.h"
 
 #define LOG_TAG "SomaSafeML"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -26,14 +27,10 @@ static void throw_error(JNIEnv* jni, const std::string& msg) {
     jni->ThrowNew(cls, msg.c_str());
 }
 
-static ModelHandle* to_handle(jlong ptr) {
-    return reinterpret_cast<ModelHandle*>(ptr);
-}
-
 extern "C" {
 
 JNIEXPORT jlong JNICALL
-Java_app_somasafe_LiteRtModel_nativeCreate(JNIEnv* jni, jobject, jstring path) {
+Java_app_somasafe_model_LiteRtModel_nativeCreate(JNIEnv* jni, jobject, jstring path) {
     const char* cpath = jni->GetStringUTFChars(path, nullptr);
     std::string model_path(cpath);
     jni->ReleaseStringUTFChars(path, cpath);
@@ -56,13 +53,13 @@ Java_app_somasafe_LiteRtModel_nativeCreate(JNIEnv* jni, jobject, jstring path) {
 }
 
 JNIEXPORT void JNICALL
-Java_app_somasafe_LiteRtModel_nativeDestroy(JNIEnv*, jobject, jlong ptr) {
-    delete to_handle(ptr);
+Java_app_somasafe_model_LiteRtModel_nativeDestroy(JNIEnv*, jobject, jlong ptr) {
+    delete reinterpret_cast<ModelHandle*>(ptr);
 }
 
 JNIEXPORT jfloatArray JNICALL
-Java_app_somasafe_LiteRtModel_nativeRunEval(JNIEnv* jni, jobject, jlong ptr, jfloatArray input) {
-    auto* h = to_handle(ptr);
+Java_app_somasafe_model_LiteRtModel_nativeRunEval(JNIEnv* jni, jobject, jlong ptr, jfloatArray input) {
+    auto* h = reinterpret_cast<ModelHandle*>(ptr);
     jsize len = jni->GetArrayLength(input);
 
     std::vector<float> in_data(len);
@@ -84,23 +81,18 @@ Java_app_somasafe_LiteRtModel_nativeRunEval(JNIEnv* jni, jobject, jlong ptr, jfl
 // Quantizes float input → runs the int8 eval signature → dequantizes to float.
 // Quantization parameters are read from the model's eval signature tensors.
 JNIEXPORT jfloatArray JNICALL
-Java_app_somasafe_LiteRtModel_nativeRunEvalQuantized(JNIEnv* jni, jobject, jlong ptr, jfloatArray input) {
-    auto* h = to_handle(ptr);
+Java_app_somasafe_model_LiteRtModel_nativeRunEvalQuantized(JNIEnv* jni, jobject, jlong ptr, jfloatArray input) {
+    auto* h = reinterpret_cast<ModelHandle*>(ptr);
     jsize len = jni->GetArrayLength(input);
 
-    auto sig_result = h->model.FindSignature(EVAL_SIG_NAME);
-    if (!sig_result) {
-        throw_error(jni, "eval signature not found: " + sig_result.Error().Message());
+    auto quant_result = get_per_tensor_quantization(
+        h->model, EVAL_SIG_NAME, DATA_IN_BUF_NAME, RES_OUT_BUF_NAME);
+    if (!quant_result) {
+        throw_error(jni, quant_result.Error().Message());
         return nullptr;
     }
-    auto in_tensor  = sig_result->InputTensor(DATA_IN_BUF_NAME);
-    auto out_tensor = sig_result->OutputTensor(RES_OUT_BUF_NAME);
-    if (!in_tensor || !out_tensor) {
-        throw_error(jni, "eval tensor not found");
-        return nullptr;
-    }
-    const auto in_q  = in_tensor->PerTensorQuantization();
-    const auto out_q = out_tensor->PerTensorQuantization();
+    const auto in_q  = quant_result->input;
+    const auto out_q = quant_result->output;
 
     std::vector<float>  float_in(len);
     std::vector<int8_t> quant_in(len);
@@ -123,9 +115,9 @@ Java_app_somasafe_LiteRtModel_nativeRunEvalQuantized(JNIEnv* jni, jobject, jlong
 }
 
 JNIEXPORT jfloat JNICALL
-Java_app_somasafe_LiteRtModel_nativeTrain(JNIEnv* jni, jobject, jlong ptr,
+Java_app_somasafe_model_LiteRtModel_nativeTrain(JNIEnv* jni, jobject, jlong ptr,
                                           jfloatArray data, jfloatArray labels, jint epochs) {
-    auto* h = to_handle(ptr);
+    auto* h = reinterpret_cast<ModelHandle*>(ptr);
 
     jsize data_len  = jni->GetArrayLength(data);
     jsize label_len = jni->GetArrayLength(labels);
@@ -144,8 +136,8 @@ Java_app_somasafe_LiteRtModel_nativeTrain(JNIEnv* jni, jobject, jlong ptr,
 }
 
 JNIEXPORT jfloatArray JNICALL
-Java_app_somasafe_LiteRtModel_nativeSaveWeights(JNIEnv* jni, jobject, jlong ptr) {
-    auto* h = to_handle(ptr);
+Java_app_somasafe_model_LiteRtModel_nativeSaveWeights(JNIEnv* jni, jobject, jlong ptr) {
+    auto* h = reinterpret_cast<ModelHandle*>(ptr);
 
     auto result = save_weights(h->model);
     if (!result) {
@@ -159,8 +151,8 @@ Java_app_somasafe_LiteRtModel_nativeSaveWeights(JNIEnv* jni, jobject, jlong ptr)
 }
 
 JNIEXPORT void JNICALL
-Java_app_somasafe_LiteRtModel_nativeRestoreWeights(JNIEnv* jni, jobject, jlong ptr, jfloatArray weights) {
-    auto* h = to_handle(ptr);
+Java_app_somasafe_model_LiteRtModel_nativeRestoreWeights(JNIEnv* jni, jobject, jlong ptr, jfloatArray weights) {
+    auto* h = reinterpret_cast<ModelHandle*>(ptr);
 
     jsize len = jni->GetArrayLength(weights);
     std::vector<float> params(len);
@@ -170,6 +162,138 @@ Java_app_somasafe_LiteRtModel_nativeRestoreWeights(JNIEnv* jni, jobject, jlong p
     if (!result) {
         throw_error(jni, result.Error().Message());
     }
+}
+
+// ── JNI object builders ───────────────────────────────────────────────────────
+
+static jobject build_quant_info(JNIEnv* jni,
+                                jclass cls, jmethodID ctor,
+                                const QuantizationInfoData& q) {
+    const char* type_cstr;
+    switch (q.type) {
+        case QuantizationInfoData::Type::PerTensor:  type_cstr = "per_tensor";  break;
+        case QuantizationInfoData::Type::PerChannel: type_cstr = "per_channel"; break;
+        case QuantizationInfoData::Type::BlockWise:  type_cstr = "block_wise";  break;
+        case QuantizationInfoData::Type::Unknown:    type_cstr = "unknown";     break;
+        default:                                     type_cstr = "none";        break;
+    }
+
+    jstring  type_str  = jni->NewStringUTF(type_cstr);
+    jfloatArray scales = jni->NewFloatArray((jsize)q.scales.size());
+    jintArray   zp_arr = jni->NewIntArray((jsize)q.zero_points.size());
+
+    if (!q.scales.empty())
+        jni->SetFloatArrayRegion(scales, 0, (jsize)q.scales.size(),
+            reinterpret_cast<const jfloat*>(q.scales.data()));
+    if (!q.zero_points.empty())
+        jni->SetIntArrayRegion(zp_arr, 0, (jsize)q.zero_points.size(),
+            reinterpret_cast<const jint*>(q.zero_points.data()));
+
+    jobject obj = jni->NewObject(cls, ctor,
+        type_str, (jfloat)q.scale, (jint)q.zero_point, (jint)q.quantized_dim,
+        scales, zp_arr);
+
+    jni->DeleteLocalRef(type_str);
+    jni->DeleteLocalRef(scales);
+    jni->DeleteLocalRef(zp_arr);
+    return obj;
+}
+
+static jobject build_tensor_info(JNIEnv* jni,
+                                 jclass tensor_cls, jmethodID tensor_ctor,
+                                 jclass quant_cls,  jmethodID quant_ctor,
+                                 const TensorInfoData& t) {
+    jstring     name      = jni->NewStringUTF(t.name.c_str());
+    jstring     etype     = jni->NewStringUTF(t.element_type.c_str());
+    jintArray   shape_arr = jni->NewIntArray((jsize)t.shape.size());
+    if (!t.shape.empty())
+        jni->SetIntArrayRegion(shape_arr, 0, (jsize)t.shape.size(),
+            reinterpret_cast<const jint*>(t.shape.data()));
+
+    jobject quant = build_quant_info(jni, quant_cls, quant_ctor, t.quantization);
+    jobject obj   = jni->NewObject(tensor_cls, tensor_ctor,
+        name, etype, (jboolean)t.is_ranked, shape_arr, quant);
+
+    jni->DeleteLocalRef(name);
+    jni->DeleteLocalRef(etype);
+    jni->DeleteLocalRef(shape_arr);
+    jni->DeleteLocalRef(quant);
+    return obj;
+}
+
+JNIEXPORT jobject JNICALL
+Java_app_somasafe_model_LiteRtModel_nativeDescribe(JNIEnv* jni, jobject, jlong ptr, jstring name) {
+    auto* h = reinterpret_cast<ModelHandle*>(ptr);
+
+    const char* cname = jni->GetStringUTFChars(name, nullptr);
+    auto result = get_model_info(h->model, cname);
+    jni->ReleaseStringUTFChars(name, cname);
+
+    if (!result) {
+        throw_error(jni, result.Error().Message());
+        return nullptr;
+    }
+    const ModelInfoData& data = *result;
+
+    // Look up all classes and method IDs up front.
+    jclass quant_cls    = jni->FindClass("app/somasafe/model/QuantizationInfo");
+    jclass tensor_cls   = jni->FindClass("app/somasafe/model/TensorInfo");
+    jclass sig_cls      = jni->FindClass("app/somasafe/model/SignatureInfo");
+    jclass model_cls    = jni->FindClass("app/somasafe/model/ModelInfo");
+    jclass list_cls     = jni->FindClass("java/util/ArrayList");
+    if (!quant_cls || !tensor_cls || !sig_cls || !model_cls || !list_cls) return nullptr;
+
+    jmethodID quant_ctor  = jni->GetMethodID(quant_cls,  "<init>", "(Ljava/lang/String;FII[F[I)V");
+    jmethodID tensor_ctor = jni->GetMethodID(tensor_cls, "<init>",
+        "(Ljava/lang/String;Ljava/lang/String;Z[ILapp/somasafe/model/QuantizationInfo;)V");
+    jmethodID sig_ctor    = jni->GetMethodID(sig_cls,    "<init>",
+        "(Ljava/lang/String;Ljava/util/List;Ljava/util/List;)V");
+    jmethodID model_ctor  = jni->GetMethodID(model_cls,  "<init>",
+        "(Ljava/lang/String;Ljava/util/List;)V");
+    jmethodID list_ctor   = jni->GetMethodID(list_cls,   "<init>", "()V");
+    jmethodID list_add    = jni->GetMethodID(list_cls,   "add",    "(Ljava/lang/Object;)Z");
+
+    // Build the signatures list.
+    jobject sigs_list = jni->NewObject(list_cls, list_ctor);
+    for (const auto& sig : data.signatures) {
+        jobject inputs_list  = jni->NewObject(list_cls, list_ctor);
+        jobject outputs_list = jni->NewObject(list_cls, list_ctor);
+
+        for (const auto& t : sig.inputs) {
+            jobject tensor = build_tensor_info(jni, tensor_cls, tensor_ctor,
+                                               quant_cls, quant_ctor, t);
+            jni->CallBooleanMethod(inputs_list, list_add, tensor);
+            jni->DeleteLocalRef(tensor);
+        }
+        for (const auto& t : sig.outputs) {
+            jobject tensor = build_tensor_info(jni, tensor_cls, tensor_ctor,
+                                               quant_cls, quant_ctor, t);
+            jni->CallBooleanMethod(outputs_list, list_add, tensor);
+            jni->DeleteLocalRef(tensor);
+        }
+
+        jstring  sig_key = jni->NewStringUTF(sig.key.c_str());
+        jobject  sig_obj = jni->NewObject(sig_cls, sig_ctor,
+            sig_key, inputs_list, outputs_list);
+
+        jni->CallBooleanMethod(sigs_list, list_add, sig_obj);
+        jni->DeleteLocalRef(sig_key);
+        jni->DeleteLocalRef(inputs_list);
+        jni->DeleteLocalRef(outputs_list);
+        jni->DeleteLocalRef(sig_obj);
+    }
+
+    jstring model_name = jni->NewStringUTF(data.name.c_str());
+    jobject model_obj  = jni->NewObject(model_cls, model_ctor, model_name, sigs_list);
+
+    jni->DeleteLocalRef(model_name);
+    jni->DeleteLocalRef(sigs_list);
+    jni->DeleteLocalRef(quant_cls);
+    jni->DeleteLocalRef(tensor_cls);
+    jni->DeleteLocalRef(sig_cls);
+    jni->DeleteLocalRef(model_cls);
+    jni->DeleteLocalRef(list_cls);
+    return model_obj;
 }
 
 } // extern "C"

@@ -50,6 +50,15 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+
+    defaultConfig {
+        buildConfigField(
+            "String",
+            "BACKEND_URL",
+            "\"${project.findProperty("backend.url") ?: "http://192.168.0.10:8000"}\"",
+        )
     }
 }
 
