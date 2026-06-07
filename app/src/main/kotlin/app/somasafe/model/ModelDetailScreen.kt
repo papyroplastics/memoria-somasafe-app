@@ -6,13 +6,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SuggestionChip
+import androidx.compose.material3.SuggestionChipDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -26,6 +27,24 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+
+private val KNOWN_ROLES: List<Pair<Regex, (MatchResult) -> String>> = listOf(
+    Regex("^feature_(\\d+)$")       to { m -> "feature vector v${m.groupValues[1]}" },
+    Regex("^signal_(\\d+)$")        to { m -> "raw signal v${m.groupValues[1]}" },
+    Regex("^label_(\\d+)$")         to { m -> "labels v${m.groupValues[1]}" },
+    Regex("^score_(\\d+)$")         to { m -> "anomaly score v${m.groupValues[1]}" },
+    Regex("^logit_(\\d+)$")         to { m -> "logit v${m.groupValues[1]}" },
+    Regex("^loss_(\\d+)$")          to { m -> "training loss v${m.groupValues[1]}" },
+    Regex("^parameters$")           to { _ -> "model weights" },
+    Regex("^parameter_count$")      to { _ -> "parameter count" },
+)
+
+private fun TensorInfo.role(): String? {
+    for ((regex, label) in KNOWN_ROLES) {
+        regex.matchEntire(name)?.let { return label(it) }
+    }
+    return null
+}
 
 @Composable
 fun ModelDetailScreen(model: File, modifier: Modifier = Modifier) {
@@ -126,12 +145,28 @@ private fun SignatureSection(sig: SignatureInfo) {
 
 @Composable
 private fun TensorCard(tensor: TensorInfo) {
+    val role = tensor.role()
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Text(tensor.name, style = MaterialTheme.typography.bodyMedium)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(tensor.name, style = MaterialTheme.typography.bodyMedium)
+                if (role != null) {
+                    SuggestionChip(
+                        onClick = {},
+                        label = { Text(role, style = MaterialTheme.typography.labelSmall) },
+                        colors = SuggestionChipDefaults.suggestionChipColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            labelColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        ),
+                    )
+                }
+            }
             Text(
                 "${tensor.elementType} • ${tensor.shape.toShapeString(tensor.ranked)}",
                 style = MaterialTheme.typography.bodySmall,

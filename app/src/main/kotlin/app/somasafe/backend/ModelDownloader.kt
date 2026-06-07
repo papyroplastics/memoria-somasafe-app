@@ -4,6 +4,7 @@ import android.content.Context
 import app.somasafe.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -12,13 +13,14 @@ const val BACKEND_URL = BuildConfig.BACKEND_URL
 
 fun modelsDir(context: Context): File = File(context.filesDir, "models")
 
-enum class ModelVariant(
-    val label: String,
-    val endpoint: String,
-    val filename: String,
+data class ModelInfo(
+    val key: String,
+    val name: String,
+    val lastUpdated: String,
+    val purpose: String,
 ) {
-    TRAINABLE("Trainable", "$BACKEND_URL/model/trainable", "trainable.tflite"),
-    QUANTIZED("Quantized", "$BACKEND_URL/model/quantized", "quantized.tflite"),
+    val endpoint: String get() = "$BACKEND_URL/model/$key"
+    val filename: String get() = "$key.tflite"
 }
 
 sealed interface DownloadState {
@@ -27,6 +29,31 @@ sealed interface DownloadState {
     data class Done(val path: String) : DownloadState
     data class Error(val message: String) : DownloadState
 }
+
+suspend fun fetchModels(): Result<List<ModelInfo>> =
+    withContext(Dispatchers.IO) {
+        runCatching {
+            val connection = URL("$BACKEND_URL/models").openConnection() as HttpURLConnection
+            try {
+                connection.connect()
+                val code = connection.responseCode
+                if (code != HttpURLConnection.HTTP_OK) error("HTTP $code")
+                val body = connection.inputStream.bufferedReader().readText()
+                val array = JSONArray(body)
+                List(array.length()) { i ->
+                    val obj = array.getJSONObject(i)
+                    ModelInfo(
+                        key = obj.getString("key"),
+                        name = obj.getString("name"),
+                        lastUpdated = obj.getString("last_updated"),
+                        purpose = obj.getString("purpose"),
+                    )
+                }
+            } finally {
+                connection.disconnect()
+            }
+        }
+    }
 
 suspend fun downloadModel(url: String, dest: File): Result<Unit> =
     withContext(Dispatchers.IO) {

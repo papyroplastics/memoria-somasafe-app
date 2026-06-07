@@ -27,6 +27,27 @@ static void throw_error(JNIEnv* jni, const std::string& msg) {
     jni->ThrowNew(cls, msg.c_str());
 }
 
+// Unpacks a Kotlin Array<FloatArray> into parallel C++ vectors + span views.
+static bool unpack_float_arrays(
+    JNIEnv* jni,
+    jobjectArray arrays,
+    std::vector<std::vector<float>>& storage,
+    std::vector<absl::Span<const float>>& spans
+) {
+    jsize n = jni->GetArrayLength(arrays);
+    storage.resize(n);
+    spans.resize(n);
+    for (jsize i = 0; i < n; ++i) {
+        auto arr = (jfloatArray) jni->GetObjectArrayElement(arrays, i);
+        jsize len = jni->GetArrayLength(arr);
+        storage[i].resize(len);
+        jni->GetFloatArrayRegion(arr, 0, len, storage[i].data());
+        spans[i] = absl::MakeConstSpan(storage[i]);
+        jni->DeleteLocalRef(arr);
+    }
+    return true;
+}
+
 extern "C" {
 
 JNIEXPORT jlong JNICALL
@@ -57,36 +78,44 @@ Java_app_somasafe_model_LiteRtModel_nativeDestroy(JNIEnv*, jobject, jlong ptr) {
     delete reinterpret_cast<ModelHandle*>(ptr);
 }
 
-JNIEXPORT jfloatArray JNICALL
-Java_app_somasafe_model_LiteRtModel_nativeRunEval(JNIEnv* jni, jobject, jlong ptr, jfloatArray input) {
+// inputs: Array<FloatArray> ordered by eval signature tensor index
+// returns: Array<FloatArray> ordered by eval signature output tensor index
+JNIEXPORT jobjectArray JNICALL
+Java_app_somasafe_model_LiteRtModel_nativeRunEval(JNIEnv* jni, jobject, jlong ptr, jobjectArray inputs) {
     auto* h = reinterpret_cast<ModelHandle*>(ptr);
-    jsize len = jni->GetArrayLength(input);
 
-    std::vector<float> in_data(len);
-    jni->GetFloatArrayRegion(input, 0, len, in_data.data());
-    std::vector<float> out_data(len);
+    std::vector<std::vector<float>> storage;
+    std::vector<absl::Span<const float>> spans;
+    if (!unpack_float_arrays(jni, inputs, storage, spans)) return nullptr;
 
-    auto result = run_model<float>(h->model,
-        absl::MakeConstSpan(in_data), absl::MakeSpan(out_data));
+    auto result = run_model(h->model, EVAL_SIG_NAME, spans);
     if (!result) {
         throw_error(jni, result.Error().Message());
         return nullptr;
     }
 
-    jfloatArray out = jni->NewFloatArray(len);
-    jni->SetFloatArrayRegion(out, 0, len, out_data.data());
+    const auto& outputs = *result;
+    jclass float_arr_cls = jni->FindClass("[F");
+    jobjectArray out = jni->NewObjectArray((jsize) outputs.size(), float_arr_cls, nullptr);
+    jni->DeleteLocalRef(float_arr_cls);
+
+    for (jsize i = 0; i < (jsize) outputs.size(); ++i) {
+        jfloatArray arr = jni->NewFloatArray((jsize) outputs[i].size());
+        jni->SetFloatArrayRegion(arr, 0, (jsize) outputs[i].size(), outputs[i].data());
+        jni->SetObjectArrayElement(out, i, arr);
+        jni->DeleteLocalRef(arr);
+    }
     return out;
 }
 
 // Quantizes float input → runs the int8 eval signature → dequantizes to float.
-// Quantization parameters are read from the model's eval signature tensors.
+// Quantization parameters are read from tensor indices 0 (input) and 0 (output).
 JNIEXPORT jfloatArray JNICALL
 Java_app_somasafe_model_LiteRtModel_nativeRunEvalQuantized(JNIEnv* jni, jobject, jlong ptr, jfloatArray input) {
     auto* h = reinterpret_cast<ModelHandle*>(ptr);
     jsize len = jni->GetArrayLength(input);
 
-    auto quant_result = get_per_tensor_quantization(
-        h->model, EVAL_SIG_NAME, DATA_IN_BUF_NAME, RES_OUT_BUF_NAME);
+    auto quant_result = get_per_tensor_quantization(h->model, EVAL_SIG_NAME, 0, 0);
     if (!quant_result) {
         throw_error(jni, quant_result.Error().Message());
         return nullptr;
@@ -96,38 +125,37 @@ Java_app_somasafe_model_LiteRtModel_nativeRunEvalQuantized(JNIEnv* jni, jobject,
 
     std::vector<float>  float_in(len);
     std::vector<int8_t> quant_in(len);
-    std::vector<int8_t> quant_out(len);
-    std::vector<float>  float_out(len);
     jni->GetFloatArrayRegion(input, 0, len, float_in.data());
 
     auto r1 = quantize(in_q, absl::MakeConstSpan(float_in), absl::MakeSpan(quant_in));
     if (!r1) { throw_error(jni, r1.Error().Message()); return nullptr; }
 
-    auto r2 = run_model<int8_t>(h->model, absl::MakeConstSpan(quant_in), absl::MakeSpan(quant_out));
-    if (!r2) { throw_error(jni, r2.Error().Message()); return nullptr; }
+    auto run_result = run_model_quantized(h->model, EVAL_SIG_NAME, absl::MakeConstSpan(quant_in));
+    if (!run_result) { throw_error(jni, run_result.Error().Message()); return nullptr; }
+    const auto& quant_out = *run_result;
 
+    std::vector<float> float_out(quant_out.size());
     auto r3 = dequantize(out_q, absl::MakeConstSpan(quant_out), absl::MakeSpan(float_out));
     if (!r3) { throw_error(jni, r3.Error().Message()); return nullptr; }
 
-    jfloatArray out = jni->NewFloatArray(len);
-    jni->SetFloatArrayRegion(out, 0, len, float_out.data());
+    jfloatArray out = jni->NewFloatArray((jsize) float_out.size());
+    jni->SetFloatArrayRegion(out, 0, (jsize) float_out.size(), float_out.data());
     return out;
 }
 
+// inputs: Array<FloatArray> ordered by train signature tensor index
+// returns: final epoch average loss
 JNIEXPORT jfloat JNICALL
 Java_app_somasafe_model_LiteRtModel_nativeTrain(JNIEnv* jni, jobject, jlong ptr,
-                                          jfloatArray data, jfloatArray labels, jint epochs) {
+                                          jobjectArray inputs, jint epochs) {
     auto* h = reinterpret_cast<ModelHandle*>(ptr);
 
-    jsize data_len  = jni->GetArrayLength(data);
-    jsize label_len = jni->GetArrayLength(labels);
-    std::vector<float> data_vec(data_len);
-    std::vector<float> label_vec(label_len);
-    jni->GetFloatArrayRegion(data,   0, data_len,  data_vec.data());
-    jni->GetFloatArrayRegion(labels, 0, label_len, label_vec.data());
+    std::vector<std::vector<float>> storage;
+    std::vector<absl::Span<const float>> spans;
+    if (!unpack_float_arrays(jni, inputs, storage, spans)) return 0.0f;
 
-    auto result = train_model(h->model, static_cast<uint32_t>(epochs),
-        absl::MakeConstSpan(data_vec), absl::MakeConstSpan(label_vec));
+    auto result = train_model(h->model, TRAIN_SIG_NAME,
+        static_cast<uint32_t>(epochs), spans);
     if (!result) {
         throw_error(jni, result.Error().Message());
         return 0.0f;

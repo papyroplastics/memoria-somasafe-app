@@ -15,9 +15,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -25,15 +29,25 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import java.io.File
 
+private sealed interface ModelListState {
+    data object Loading : ModelListState
+    data class Loaded(val models: List<ModelInfo>) : ModelListState
+    data class Error(val message: String) : ModelListState
+}
+
 @Composable
 fun BackendDownloadScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    val states = remember {
-        mutableStateMapOf<ModelVariant, DownloadState>().apply {
-            ModelVariant.entries.forEach { put(it, DownloadState.Idle) }
-        }
+    var listState by remember { mutableStateOf<ModelListState>(ModelListState.Loading) }
+    val downloadStates = remember { mutableStateMapOf<String, DownloadState>() }
+
+    LaunchedEffect(Unit) {
+        listState = fetchModels().fold(
+            onSuccess = { ModelListState.Loaded(it) },
+            onFailure = { ModelListState.Error(it.message ?: "Unknown error") },
+        )
     }
 
     Column(
@@ -51,28 +65,47 @@ fun BackendDownloadScreen(modifier: Modifier = Modifier) {
 
         HorizontalDivider()
 
-        ModelVariant.entries.forEach { variant ->
-            ModelDownloadCard(
-                variant = variant,
-                state = states[variant] ?: DownloadState.Idle,
-                onDownload = {
-                    states[variant] = DownloadState.InProgress
-                    scope.launch {
-                        val dest = File(modelsDir(context), variant.filename)
-                        states[variant] = downloadModel(variant.endpoint, dest).fold(
-                            onSuccess = { DownloadState.Done(dest.absolutePath) },
-                            onFailure = { DownloadState.Error(it.message ?: "Unknown error") },
-                        )
-                    }
-                },
-            )
+        when (val state = listState) {
+            ModelListState.Loading ->
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    Text("Loading models…", style = MaterialTheme.typography.bodyMedium)
+                }
+
+            is ModelListState.Error ->
+                Text(
+                    "Failed to load models: ${state.message}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+
+            is ModelListState.Loaded ->
+                state.models.forEach { model ->
+                    ModelDownloadCard(
+                        model = model,
+                        state = downloadStates[model.key] ?: DownloadState.Idle,
+                        onDownload = {
+                            downloadStates[model.key] = DownloadState.InProgress
+                            scope.launch {
+                                val dest = File(modelsDir(context), model.filename)
+                                downloadStates[model.key] = downloadModel(model.endpoint, dest).fold(
+                                    onSuccess = { DownloadState.Done(dest.absolutePath) },
+                                    onFailure = { DownloadState.Error(it.message ?: "Unknown error") },
+                                )
+                            }
+                        },
+                    )
+                }
         }
     }
 }
 
 @Composable
 private fun ModelDownloadCard(
-    variant: ModelVariant,
+    model: ModelInfo,
     state: DownloadState,
     onDownload: () -> Unit,
 ) {
@@ -83,7 +116,12 @@ private fun ModelDownloadCard(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(variant.label, style = MaterialTheme.typography.titleMedium)
+            Text(model.name, style = MaterialTheme.typography.titleMedium)
+            Text(
+                model.purpose,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
             when (state) {
                 DownloadState.Idle ->
