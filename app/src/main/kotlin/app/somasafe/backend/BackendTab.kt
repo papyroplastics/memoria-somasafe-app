@@ -8,11 +8,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -26,12 +26,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 private sealed interface ModelListState {
     data object Loading : ModelListState
-    data class Loaded(val models: List<ModelInfo>) : ModelListState
+    data class Loaded(val models: List<RemoteModel>) : ModelListState
     data class Error(val message: String) : ModelListState
 }
 
@@ -42,12 +44,22 @@ fun BackendDownloadScreen(modifier: Modifier = Modifier) {
 
     var listState by remember { mutableStateOf<ModelListState>(ModelListState.Loading) }
     val downloadStates = remember { mutableStateMapOf<String, DownloadState>() }
+    val localMetas = remember { mutableStateMapOf<String, RemoteModel>() }
 
     LaunchedEffect(Unit) {
         listState = fetchModels().fold(
             onSuccess = { ModelListState.Loaded(it) },
             onFailure = { ModelListState.Error(it.message ?: "Unknown error") },
         )
+    }
+
+    LaunchedEffect(listState) {
+        val loaded = listState as? ModelListState.Loaded ?: return@LaunchedEffect
+        withContext(Dispatchers.IO) {
+            loaded.models.forEach { model ->
+                loadModelMeta(context, model.key)?.let { localMetas[model.key] = it }
+            }
+        }
     }
 
     Column(
@@ -86,15 +98,22 @@ fun BackendDownloadScreen(modifier: Modifier = Modifier) {
                 state.models.forEach { model ->
                     ModelDownloadCard(
                         model = model,
+                        localMeta = localMetas[model.key],
                         state = downloadStates[model.key] ?: DownloadState.Idle,
                         onDownload = {
-                            downloadStates[model.key] = DownloadState.InProgress
                             scope.launch {
-                                val dest = File(modelsDir(context), model.filename)
-                                downloadStates[model.key] = downloadModel(model.endpoint, dest).fold(
-                                    onSuccess = { DownloadState.Done(dest.absolutePath) },
-                                    onFailure = { DownloadState.Error(it.message ?: "Unknown error") },
-                                )
+                                downloadStates[model.key] = DownloadState.InProgress
+                                val dest = File(modelDir(context, model.key), MODEL_FILENAME)
+                                val result = downloadModel(model.trainableEndpoint, dest)
+                                if (result.isSuccess) {
+                                    withContext(Dispatchers.IO) { saveModelMeta(context, model) }
+                                    localMetas[model.key] = model
+                                    downloadStates[model.key] = DownloadState.Done(dest.absolutePath)
+                                } else {
+                                    downloadStates[model.key] = DownloadState.Error(
+                                        result.exceptionOrNull()?.message ?: "Unknown error"
+                                    )
+                                }
                             }
                         },
                     )
@@ -105,10 +124,13 @@ fun BackendDownloadScreen(modifier: Modifier = Modifier) {
 
 @Composable
 private fun ModelDownloadCard(
-    model: ModelInfo,
+    model: RemoteModel,
+    localMeta: RemoteModel?,
     state: DownloadState,
     onDownload: () -> Unit,
 ) {
+    val isUpToDate = localMeta != null && localMeta.modelId == model.modelId
+
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
@@ -123,10 +145,23 @@ private fun ModelDownloadCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            when (state) {
-                DownloadState.Idle ->
-                    Button(onClick = onDownload) { Text("Download") }
+            if (localMeta != null) {
+                Text(
+                    "Downloaded: v${localMeta.modelId}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
 
+            if (!isUpToDate) {
+                Text(
+                    "Upstream: v${model.modelId}  ·  ${model.lastUpdated.take(10)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+
+            when (state) {
                 DownloadState.InProgress ->
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -136,15 +171,6 @@ private fun ModelDownloadCard(
                         Text("Downloading…", style = MaterialTheme.typography.bodyMedium)
                     }
 
-                is DownloadState.Done -> {
-                    Text(
-                        "Saved: ${state.path}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    OutlinedButton(onClick = onDownload) { Text("Re-download") }
-                }
-
                 is DownloadState.Error -> {
                     Text(
                         "Error: ${state.message}",
@@ -153,6 +179,21 @@ private fun ModelDownloadCard(
                     )
                     Button(onClick = onDownload) { Text("Retry") }
                 }
+
+                else ->
+                    if (isUpToDate) {
+                        Button(
+                            onClick = onDownload,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            ),
+                        ) { Text("Download") }
+                    } else {
+                        Button(onClick = onDownload) {
+                            Text(if (localMeta == null) "Download" else "Update")
+                        }
+                    }
             }
         }
     }

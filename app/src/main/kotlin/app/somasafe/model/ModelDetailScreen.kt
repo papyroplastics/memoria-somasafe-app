@@ -6,8 +6,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -20,43 +23,51 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import app.somasafe.backend.MODEL_FILENAME
+import app.somasafe.backend.RemoteModel
+import app.somasafe.backend.loadModelMeta
+import app.somasafe.backend.modelDir
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
-private val KNOWN_ROLES: List<Pair<Regex, (MatchResult) -> String>> = listOf(
-    Regex("^feature_(\\d+)$")       to { m -> "feature vector v${m.groupValues[1]}" },
-    Regex("^signal_(\\d+)$")        to { m -> "raw signal v${m.groupValues[1]}" },
-    Regex("^label_(\\d+)$")         to { m -> "labels v${m.groupValues[1]}" },
-    Regex("^score_(\\d+)$")         to { m -> "anomaly score v${m.groupValues[1]}" },
-    Regex("^logit_(\\d+)$")         to { m -> "logit v${m.groupValues[1]}" },
-    Regex("^loss_(\\d+)$")          to { m -> "training loss v${m.groupValues[1]}" },
-    Regex("^parameters$")           to { _ -> "model weights" },
-    Regex("^parameter_count$")      to { _ -> "parameter count" },
+private val KNOWN_ROLES: Map<String, String> = mapOf(
+    "feature"         to "feature vector",
+    "signal"          to "raw signal",
+    "label"           to "labels",
+    "score"           to "anomaly score",
+    "logit"           to "logit",
+    "loss"            to "training loss",
+    "parameters"      to "model weights",
+    "parameter_count" to "parameter count",
 )
 
-private fun TensorInfo.role(): String? {
-    for ((regex, label) in KNOWN_ROLES) {
-        regex.matchEntire(name)?.let { return label(it) }
-    }
-    return null
-}
+private fun TensorInfo.role(): String? = KNOWN_ROLES[name]
 
 @Composable
-fun ModelDetailScreen(model: File, modifier: Modifier = Modifier) {
+fun ModelDetailScreen(modelKey: String, modifier: Modifier = Modifier, onDeleted: () -> Unit = {}) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val modelFile = File(modelDir(context, modelKey), MODEL_FILENAME)
+    var storedMeta by remember { mutableStateOf<RemoteModel?>(null) }
     var modelInfo by remember { mutableStateOf<ModelInfo?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(model) {
+    LaunchedEffect(modelKey) {
+        storedMeta = null
         modelInfo = null
         error = null
         runCatching {
             withContext(Dispatchers.Default) {
-                LiteRtModel(model.absolutePath).use { it.describe(model.nameWithoutExtension) }
+                storedMeta = withContext(Dispatchers.IO) { loadModelMeta(context, modelKey) }
+                LiteRtModel(modelFile.absolutePath).use { it.describe(modelKey) }
             }
         }.fold(
             onSuccess = { modelInfo = it },
@@ -71,13 +82,15 @@ fun ModelDetailScreen(model: File, modifier: Modifier = Modifier) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(model.name, style = MaterialTheme.typography.headlineSmall)
+        Text(storedMeta?.name ?: modelKey, style = MaterialTheme.typography.headlineSmall)
 
         Text(
-            formatFileSize(model.length()),
+            formatFileSize(modelFile.length()),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+
+        storedMeta?.let { ModelMetaCard(it) }
 
         HorizontalDivider()
 
@@ -100,6 +113,64 @@ fun ModelDetailScreen(model: File, modifier: Modifier = Modifier) {
 
             else ->
                 ModelInfoContent(modelInfo!!)
+        }
+
+        HorizontalDivider()
+
+        Button(
+            onClick = {
+                scope.launch {
+                    withContext(Dispatchers.IO) { modelDir(context, modelKey).deleteRecursively() }
+                    onDeleted()
+                }
+            },
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Delete Model")
+        }
+    }
+}
+
+@Composable
+private fun ModelMetaCard(meta: RemoteModel) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(meta.name, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "v${meta.modelId}  ·  ${meta.lastUpdated.take(10)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                meta.purpose,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (meta.firmwareId != null) {
+                Text(
+                    "Firmware: ≥ v${meta.firmwareId}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                "App: ≥ ${meta.appVersion}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

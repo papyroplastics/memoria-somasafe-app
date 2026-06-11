@@ -31,92 +31,91 @@ import app.somasafe.bluetooth.ConnectDeviceScreen
 import app.somasafe.bluetooth.FindDevicesScreen
 import app.somasafe.model.ModelDetailScreen
 import app.somasafe.model.ModelListScreen
-import java.io.File
 
 private sealed interface Screen {
-  data object DeviceList : Screen
-  data class DeviceDetail(val device: BluetoothDevice) : Screen
-  data object Backend : Screen
-  data object ModelList : Screen
-  data class ModelDetail(val model: File) : Screen
+    data object DeviceList : Screen
+    data class DeviceDetail(val device: BluetoothDevice) : Screen
+    data object Backend : Screen
+    data object ModelList : Screen
+    data class ModelDetail(val key: String) : Screen
 }
 
 private enum class AppTab(val title: String, val icon: ImageVector) {
-  BLUETOOTH("BLE Scanner", Icons.Rounded.Bluetooth),
-  BACKEND("Backend", Icons.Rounded.Hub),
-  MODEL("Model", Icons.Rounded.Memory),
+    BLUETOOTH("BLE Scanner", Icons.Rounded.Bluetooth),
+    BACKEND("Backend", Icons.Rounded.Hub),
+    MODEL("Model", Icons.Rounded.Memory),
 }
 
 private fun Screen.tab(): AppTab = when (this) {
-  Screen.DeviceList, is Screen.DeviceDetail -> AppTab.BLUETOOTH
-  Screen.Backend -> AppTab.BACKEND
-  Screen.ModelList, is Screen.ModelDetail -> AppTab.MODEL
+    Screen.DeviceList, is Screen.DeviceDetail -> AppTab.BLUETOOTH
+    Screen.Backend -> AppTab.BACKEND
+    Screen.ModelList, is Screen.ModelDetail -> AppTab.MODEL
 }
 
 private fun Screen.parent(): Screen? = when (this) {
-  is Screen.DeviceDetail -> Screen.DeviceList
-  is Screen.ModelDetail -> Screen.ModelList
-  else -> null
+    is Screen.DeviceDetail -> Screen.DeviceList
+    is Screen.ModelDetail -> Screen.ModelList
+    else -> null
 }
 
 private fun AppTab.defaultScreen(): Screen = when (this) {
-  AppTab.BLUETOOTH -> Screen.DeviceList
-  AppTab.BACKEND -> Screen.Backend
-  AppTab.MODEL -> Screen.ModelList
+    AppTab.BLUETOOTH -> Screen.DeviceList
+    AppTab.BACKEND -> Screen.Backend
+    AppTab.MODEL -> Screen.ModelList
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen() {
-  var screen by remember { mutableStateOf<Screen>(Screen.DeviceList) }
-  val tab = screen.tab()
-  val parent = screen.parent()
+    var screen by remember { mutableStateOf<Screen>(Screen.DeviceList) }
+    val tab = screen.tab()
+    val parent = screen.parent()
 
-  BackHandler(enabled = parent != null) {
-    parent?.let { screen = it }
-  }
-
-  Scaffold(
-    topBar = {
-      TopAppBar(
-        title = { Text(tab.title) },
-        navigationIcon = {
-          if (parent != null) {
-            IconButton(onClick = { screen = parent }) {
-              Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
-            }
-          }
-        },
-        colors = TopAppBarDefaults.topAppBarColors(
-          containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-          titleContentColor = MaterialTheme.colorScheme.onSurface,
-        ),
-      )
-    },
-    bottomBar = {
-      NavigationBar {
-        AppTab.entries.forEach { entry ->
-          NavigationBarItem(
-            selected = tab == entry,
-            onClick = { screen = entry.defaultScreen() },
-            icon = { Icon(entry.icon, contentDescription = entry.title) },
-            label = { Text(entry.title) },
-          )
-        }
-      }
-    },
-  ) { innerPadding ->
-    val modifier = Modifier.padding(innerPadding)
-    when (val current = screen) {
-      Screen.DeviceList -> BluetoothPermissionBox {
-        FindDevicesScreen(modifier) { screen = Screen.DeviceDetail(it) }
-      }
-      is Screen.DeviceDetail -> BluetoothPermissionBox {
-        ConnectDeviceScreen(current.device, modifier)
-      }
-      Screen.Backend -> BackendDownloadScreen(modifier)
-      Screen.ModelList -> ModelListScreen(modifier) { screen = Screen.ModelDetail(it) }
-      is Screen.ModelDetail -> ModelDetailScreen(current.model, modifier)
+    BackHandler(enabled = parent != null) {
+        parent?.let { screen = it }
     }
-  }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(tab.title) },
+                navigationIcon = {
+                    if (parent != null) {
+                        IconButton(onClick = { screen = parent }) {
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                ),
+            )
+        },
+        bottomBar = {
+            NavigationBar {
+                AppTab.entries.forEach { entry ->
+                    NavigationBarItem(
+                        selected = tab == entry,
+                        onClick = { screen = entry.defaultScreen() },
+                        icon = { Icon(entry.icon, contentDescription = entry.title) },
+                        label = { Text(entry.title) },
+                    )
+                }
+            }
+        },
+    ) { innerPadding ->
+        val modifier = Modifier.padding(innerPadding)
+        when (val current = screen) {
+            Screen.DeviceList -> BluetoothPermissionBox {
+                FindDevicesScreen(modifier) { screen = Screen.DeviceDetail(it) }
+            }
+            is Screen.DeviceDetail -> BluetoothPermissionBox {
+                ConnectDeviceScreen(current.device, modifier)
+            }
+            Screen.Backend -> BackendDownloadScreen(modifier)
+            Screen.ModelList -> ModelListScreen(modifier) { screen = Screen.ModelDetail(it) }
+            is Screen.ModelDetail -> ModelDetailScreen(current.key, modifier) { screen = Screen.ModelList }
+        }
+    }
 }

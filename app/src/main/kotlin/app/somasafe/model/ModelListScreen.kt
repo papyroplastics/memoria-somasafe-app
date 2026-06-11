@@ -20,20 +20,33 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import app.somasafe.backend.MODEL_FILENAME
+import app.somasafe.backend.loadModelMeta
 import app.somasafe.backend.modelsDir
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.DecimalFormat
 
+private data class LocalModelEntry(val key: String, val file: File, val displayName: String)
+
 @Composable
-fun ModelListScreen(modifier: Modifier = Modifier, onModelSelected: (File) -> Unit) {
+fun ModelListScreen(modifier: Modifier = Modifier, onModelSelected: (String) -> Unit) {
     val context = LocalContext.current
-    var models by remember { mutableStateOf<List<File>>(emptyList()) }
+    var models by remember { mutableStateOf<List<LocalModelEntry>>(emptyList()) }
 
     LaunchedEffect(Unit) {
         models = withContext(Dispatchers.IO) {
-            modelsDir(context).listFiles()?.sortedBy { it.name } ?: emptyList()
+            modelsDir(context).listFiles()
+                ?.filter { it.isDirectory }
+                ?.sortedBy { it.name }
+                ?.mapNotNull { dir ->
+                    val tflite = File(dir, MODEL_FILENAME)
+                    if (!tflite.exists()) return@mapNotNull null
+                    val displayName = loadModelMeta(context, dir.name)?.name ?: dir.name
+                    LocalModelEntry(dir.name, tflite, displayName)
+                }
+                ?: emptyList()
         }
     }
 
@@ -57,15 +70,19 @@ fun ModelListScreen(modifier: Modifier = Modifier, onModelSelected: (File) -> Un
                 )
             }
         } else {
-            models.forEach { file ->
-                ModelCard(file = file, onClick = { onModelSelected(file) })
+            models.forEach { entry ->
+                ModelCard(
+                    file = entry.file,
+                    displayName = entry.displayName,
+                    onClick = { onModelSelected(entry.key) },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun ModelCard(file: File, onClick: () -> Unit) {
+private fun ModelCard(file: File, displayName: String, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -73,7 +90,7 @@ private fun ModelCard(file: File, onClick: () -> Unit) {
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(file.name, style = MaterialTheme.typography.titleMedium)
+                Text(displayName, style = MaterialTheme.typography.titleMedium)
                 Text(
                     formatFileSize(file.length()),
                     style = MaterialTheme.typography.bodySmall,
