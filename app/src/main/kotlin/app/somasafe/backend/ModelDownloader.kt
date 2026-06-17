@@ -62,6 +62,21 @@ fun saveModelMeta(context: Context, model: RemoteModel) {
 fun loadModelMeta(context: Context, key: String): RemoteModel? =
     runCatching { RemoteModel.fromJson(JSONObject(metaFile(context, key).readText())) }.getOrNull()
 
+/** A model downloaded to local storage, ready to be inspected or uploaded. */
+data class LocalModel(val key: String, val displayName: String, val modelFile: File)
+
+/** List downloaded models (subdirectories of [modelsDir] that contain a model file). */
+fun listLocalModels(context: Context): List<LocalModel> =
+    modelsDir(context).listFiles()
+        ?.filter { it.isDirectory }
+        ?.sortedBy { it.name }
+        ?.mapNotNull { dir ->
+            val tflite = File(dir, MODEL_FILENAME)
+            if (!tflite.exists()) return@mapNotNull null
+            LocalModel(dir.name, loadModelMeta(context, dir.name)?.name ?: dir.name, tflite)
+        }
+        ?: emptyList()
+
 sealed interface DownloadState {
     data object Idle : DownloadState
     data object InProgress : DownloadState
