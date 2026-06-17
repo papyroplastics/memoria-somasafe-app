@@ -20,7 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import app.somasafe.backend.MODEL_FILENAME
+import app.somasafe.backend.TRAINABLE_FILENAME
 import app.somasafe.backend.loadModelMeta
 import app.somasafe.backend.modelsDir
 import kotlinx.coroutines.Dispatchers
@@ -28,7 +28,12 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.DecimalFormat
 
-private data class LocalModelEntry(val key: String, val file: File, val displayName: String)
+private data class LocalModelEntry(
+    val key: String,
+    val file: File,
+    val displayName: String,
+    val quant: QuantStatus,
+)
 
 @Composable
 fun ModelListScreen(modifier: Modifier = Modifier, onModelSelected: (String) -> Unit) {
@@ -41,10 +46,10 @@ fun ModelListScreen(modifier: Modifier = Modifier, onModelSelected: (String) -> 
                 ?.filter { it.isDirectory }
                 ?.sortedBy { it.name }
                 ?.mapNotNull { dir ->
-                    val tflite = File(dir, MODEL_FILENAME)
-                    if (!tflite.exists()) return@mapNotNull null
+                    val trainable = File(dir, TRAINABLE_FILENAME)
+                    if (!trainable.exists()) return@mapNotNull null
                     val displayName = loadModelMeta(context, dir.name)?.name ?: dir.name
-                    LocalModelEntry(dir.name, tflite, displayName)
+                    LocalModelEntry(dir.name, trainable, displayName, ModelPrep.quantStatus(context, dir.name))
                 }
                 ?: emptyList()
         }
@@ -74,6 +79,7 @@ fun ModelListScreen(modifier: Modifier = Modifier, onModelSelected: (String) -> 
                 ModelCard(
                     file = entry.file,
                     displayName = entry.displayName,
+                    quant = entry.quant,
                     onClick = { onModelSelected(entry.key) },
                 )
             }
@@ -82,7 +88,7 @@ fun ModelListScreen(modifier: Modifier = Modifier, onModelSelected: (String) -> 
 }
 
 @Composable
-private fun ModelCard(file: File, displayName: String, onClick: () -> Unit) {
+private fun ModelCard(file: File, displayName: String, quant: QuantStatus, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -96,6 +102,7 @@ private fun ModelCard(file: File, displayName: String, onClick: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                QuantIndicator(quant)
             }
             Text(
                 "Inspect →",
@@ -104,6 +111,16 @@ private fun ModelCard(file: File, displayName: String, onClick: () -> Unit) {
             )
         }
     }
+}
+
+@Composable
+private fun QuantIndicator(quant: QuantStatus) {
+    val (text, color) = when (quant) {
+        QuantStatus.MISSING -> "No quantized model" to MaterialTheme.colorScheme.onSurfaceVariant
+        QuantStatus.OUTDATED -> "Quantized · outdated" to MaterialTheme.colorScheme.error
+        QuantStatus.CURRENT -> "Quantized · up to date" to MaterialTheme.colorScheme.primary
+    }
+    Text(text, style = MaterialTheme.typography.labelSmall, color = color)
 }
 
 internal fun formatFileSize(bytes: Long): String {

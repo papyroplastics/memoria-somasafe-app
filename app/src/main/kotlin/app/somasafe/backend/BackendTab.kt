@@ -13,6 +13,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -44,7 +45,9 @@ fun BackendDownloadScreen(modifier: Modifier = Modifier) {
 
     var listState by remember { mutableStateOf<ModelListState>(ModelListState.Loading) }
     val downloadStates = remember { mutableStateMapOf<String, DownloadState>() }
+    val quantizeStates = remember { mutableStateMapOf<String, DownloadState>() }
     val localMetas = remember { mutableStateMapOf<String, RemoteModel>() }
+    val weightsPresent = remember { mutableStateMapOf<String, Boolean>() }
 
     LaunchedEffect(Unit) {
         listState = fetchModels().fold(
@@ -58,6 +61,7 @@ fun BackendDownloadScreen(modifier: Modifier = Modifier) {
         withContext(Dispatchers.IO) {
             loaded.models.forEach { model ->
                 loadModelMeta(context, model.key)?.let { localMetas[model.key] = it }
+                weightsPresent[model.key] = weightsFile(context, model.key).exists()
             }
         }
     }
@@ -100,10 +104,13 @@ fun BackendDownloadScreen(modifier: Modifier = Modifier) {
                         model = model,
                         localMeta = localMetas[model.key],
                         state = downloadStates[model.key] ?: DownloadState.Idle,
+                        quantizeState = quantizeStates[model.key] ?: DownloadState.Idle,
+                        showQuantize = localMetas[model.key] != null,
+                        quantizeEnabled = weightsPresent[model.key] == true,
                         onDownload = {
                             scope.launch {
                                 downloadStates[model.key] = DownloadState.InProgress
-                                val dest = File(modelDir(context, model.key), MODEL_FILENAME)
+                                val dest = File(modelDir(context, model.key), TRAINABLE_FILENAME)
                                 val result = downloadModel(model.trainableEndpoint, dest)
                                 if (result.isSuccess) {
                                     withContext(Dispatchers.IO) { saveModelMeta(context, model) }
@@ -114,6 +121,15 @@ fun BackendDownloadScreen(modifier: Modifier = Modifier) {
                                         result.exceptionOrNull()?.message ?: "Unknown error"
                                     )
                                 }
+                            }
+                        },
+                        onQuantize = {
+                            scope.launch {
+                                quantizeStates[model.key] = DownloadState.InProgress
+                                quantizeStates[model.key] = downloadQuantized(context, model).fold(
+                                    onSuccess = { DownloadState.Done(quantizedFile(context, model.key).absolutePath) },
+                                    onFailure = { DownloadState.Error(it.message ?: "Unknown error") },
+                                )
                             }
                         },
                     )
@@ -127,7 +143,11 @@ private fun ModelDownloadCard(
     model: RemoteModel,
     localMeta: RemoteModel?,
     state: DownloadState,
+    quantizeState: DownloadState,
+    showQuantize: Boolean,
+    quantizeEnabled: Boolean,
     onDownload: () -> Unit,
+    onQuantize: () -> Unit,
 ) {
     val isUpToDate = localMeta != null && localMeta.modelId == model.modelId
 
@@ -194,6 +214,47 @@ private fun ModelDownloadCard(
                             Text(if (localMeta == null) "Download" else "Update")
                         }
                     }
+            }
+
+            if (showQuantize) {
+                QuantizeRow(quantizeState, quantizeEnabled, onQuantize)
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuantizeRow(state: DownloadState, enabled: Boolean, onQuantize: () -> Unit) {
+    when (state) {
+        DownloadState.InProgress ->
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                Text("Quantizing…", style = MaterialTheme.typography.bodyMedium)
+            }
+
+        is DownloadState.Error -> {
+            Text(
+                "Quantize error: ${state.message}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            OutlinedButton(onClick = onQuantize, enabled = enabled) { Text("Retry quantize") }
+        }
+
+        is DownloadState.Done ->
+            OutlinedButton(onClick = onQuantize, enabled = enabled) { Text("Re-quantize") }
+
+        DownloadState.Idle -> {
+            OutlinedButton(onClick = onQuantize, enabled = enabled) { Text("Quantize") }
+            if (!enabled) {
+                Text(
+                    "Extract weights on the Model tab first.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

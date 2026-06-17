@@ -133,7 +133,7 @@ private fun ModelCard(
 
             if (models.isEmpty()) {
                 Text(
-                    "No models downloaded — get one from the Backend tab.",
+                    "No quantized models — download and quantize one on the Backend/Model tabs.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

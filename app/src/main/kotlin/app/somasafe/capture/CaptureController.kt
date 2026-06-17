@@ -2,8 +2,7 @@ package app.somasafe.capture
 
 import android.content.Context
 import android.util.Log
-import app.somasafe.backend.MODEL_FILENAME
-import app.somasafe.backend.modelDir
+import app.somasafe.backend.quantizedFile
 import app.somasafe.bluetooth.BleConnection
 import app.somasafe.device.ClientBuffer
 import app.somasafe.device.ML_ERROR_NAMES
@@ -23,7 +22,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import java.io.File
 
 private const val TAG = "CaptureController"
 
@@ -73,7 +71,7 @@ class CaptureController(
         scope.launch {
             _model.value = ModelState.Loading
             try {
-                val file = File(modelDir(context, key), MODEL_FILENAME)
+                val file = quantizedFile(context, key)
                 val bytes = withContext(Dispatchers.IO) { file.readBytes() }
                 val (featuresLen, scoreLen) =
                     withContext(Dispatchers.Default) { introspect(file.absolutePath) }

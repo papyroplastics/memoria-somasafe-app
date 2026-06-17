@@ -11,7 +11,9 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 const val BACKEND_URL = BuildConfig.BACKEND_URL
-const val MODEL_FILENAME = "model.tflite"
+const val TRAINABLE_FILENAME = "trainable.tflite"
+const val QUANTIZED_FILENAME = "quantized.tflite"
+const val WEIGHTS_FILENAME = "weights.json"
 const val META_FILENAME = "meta.json"
 
 fun modelsDir(context: Context): File = File(context.filesDir, "models")
@@ -19,6 +21,15 @@ fun modelsDir(context: Context): File = File(context.filesDir, "models")
 fun modelDir(context: Context, key: String): File = File(modelsDir(context), key)
 
 fun metaFile(context: Context, key: String): File = File(modelDir(context, key), META_FILENAME)
+
+/** Trainable LiteRT model downloaded from the backend (has eval/train/save/restore). */
+fun trainableFile(context: Context, key: String): File = File(modelDir(context, key), TRAINABLE_FILENAME)
+
+/** Int8-quantized model produced by the backend from extracted weights; uploaded to the device. */
+fun quantizedFile(context: Context, key: String): File = File(modelDir(context, key), QUANTIZED_FILENAME)
+
+/** Trainable weights extracted on-device, in the JSON shape the /quantize endpoint expects. */
+fun weightsFile(context: Context, key: String): File = File(modelDir(context, key), WEIGHTS_FILENAME)
 
 data class RemoteModel(
     val key: String,
@@ -30,6 +41,7 @@ data class RemoteModel(
     val modelId: Int,
 ) {
     val trainableEndpoint: String get() = "$BACKEND_URL/model/trainable/$key/$modelId"
+    val quantizeEndpoint: String get() = "$BACKEND_URL/model/quantize/$key/$modelId"
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("key", key)
@@ -62,18 +74,18 @@ fun saveModelMeta(context: Context, model: RemoteModel) {
 fun loadModelMeta(context: Context, key: String): RemoteModel? =
     runCatching { RemoteModel.fromJson(JSONObject(metaFile(context, key).readText())) }.getOrNull()
 
-/** A model downloaded to local storage, ready to be inspected or uploaded. */
+/** A model whose quantized variant is available locally, ready to upload to a device. */
 data class LocalModel(val key: String, val displayName: String, val modelFile: File)
 
-/** List downloaded models (subdirectories of [modelsDir] that contain a model file). */
+/** List models that have a quantized variant (the int8 model uploaded to the device). */
 fun listLocalModels(context: Context): List<LocalModel> =
     modelsDir(context).listFiles()
         ?.filter { it.isDirectory }
         ?.sortedBy { it.name }
         ?.mapNotNull { dir ->
-            val tflite = File(dir, MODEL_FILENAME)
-            if (!tflite.exists()) return@mapNotNull null
-            LocalModel(dir.name, loadModelMeta(context, dir.name)?.name ?: dir.name, tflite)
+            val quantized = File(dir, QUANTIZED_FILENAME)
+            if (!quantized.exists()) return@mapNotNull null
+            LocalModel(dir.name, loadModelMeta(context, dir.name)?.name ?: dir.name, quantized)
         }
         ?: emptyList()
 
@@ -117,5 +129,45 @@ suspend fun downloadModel(url: String, dest: File): Result<Unit> =
             } finally {
                 connection.disconnect()
             }
+        }
+    }
+
+/** POST a JSON weights body and stream the returned tflite into [dest]. */
+suspend fun postQuantize(url: String, jsonBody: ByteArray, dest: File): Result<Unit> =
+    withContext(Dispatchers.IO) {
+        runCatching {
+            dest.parentFile?.mkdirs()
+            val connection = URL(url).openConnection() as HttpURLConnection
+            try {
+                connection.requestMethod = "POST"
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.outputStream.use { it.write(jsonBody) }
+
+                val code = connection.responseCode
+                if (code != HttpURLConnection.HTTP_OK) error("HTTP $code")
+                connection.inputStream.use { input ->
+                    dest.outputStream().use { output -> input.copyTo(output) }
+                }
+                Unit
+            } finally {
+                connection.disconnect()
+            }
+        }
+    }
+
+/**
+ * Send the already-extracted `weights.json` to the backend and store the
+ * returned int8 model as `quantized.tflite`. Fails if weights have not been
+ * extracted yet (weight extraction needs the LiteRT runtime and lives in the
+ * model module).
+ */
+suspend fun downloadQuantized(context: Context, model: RemoteModel): Result<Unit> =
+    withContext(Dispatchers.IO) {
+        runCatching {
+            val weights = weightsFile(context, model.key)
+            require(weights.exists()) { "weights not extracted yet" }
+            postQuantize(model.quantizeEndpoint, weights.readBytes(), quantizedFile(context, model.key))
+                .getOrThrow()
         }
     }

@@ -15,6 +15,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.SuggestionChipDefaults
 import androidx.compose.material3.Text
@@ -29,14 +30,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import app.somasafe.backend.MODEL_FILENAME
 import app.somasafe.backend.RemoteModel
 import app.somasafe.backend.loadModelMeta
 import app.somasafe.backend.modelDir
+import app.somasafe.backend.trainableFile
+import app.somasafe.backend.weightsFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 
 private val KNOWN_ROLES: Map<String, String> = mapOf(
     "feature"         to "feature vector",
@@ -55,7 +56,7 @@ private fun TensorInfo.role(): String? = KNOWN_ROLES[name]
 fun ModelDetailScreen(modelKey: String, modifier: Modifier = Modifier, onDeleted: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val modelFile = File(modelDir(context, modelKey), MODEL_FILENAME)
+    val modelFile = trainableFile(context, modelKey)
     var storedMeta by remember { mutableStateOf<RemoteModel?>(null) }
     var modelInfo by remember { mutableStateOf<ModelInfo?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -89,6 +90,8 @@ fun ModelDetailScreen(modelKey: String, modifier: Modifier = Modifier, onDeleted
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+
+        ModelPrepSection(modelKey = modelKey, meta = storedMeta)
 
         storedMeta?.let { ModelMetaCard(it) }
 
@@ -131,6 +134,79 @@ fun ModelDetailScreen(modelKey: String, modifier: Modifier = Modifier, onDeleted
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text("Delete Model")
+        }
+    }
+}
+
+@Composable
+private fun ModelPrepSection(modelKey: String, meta: RemoteModel?) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var weightsPresent by remember(modelKey) { mutableStateOf(false) }
+    var quant by remember(modelKey) { mutableStateOf(QuantStatus.MISSING) }
+    var busy by remember(modelKey) { mutableStateOf(false) }
+    var message by remember(modelKey) { mutableStateOf<String?>(null) }
+
+    suspend fun refresh() = withContext(Dispatchers.IO) {
+        weightsPresent = weightsFile(context, modelKey).exists()
+        quant = ModelPrep.quantStatus(context, modelKey)
+    }
+
+    LaunchedEffect(modelKey) { refresh() }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            busy = true
+                            message = ModelPrep.extractWeights(context, modelKey).fold(
+                                onSuccess = { "Weights extracted" },
+                                onFailure = { "Extract failed: ${it.message}" },
+                            )
+                            refresh()
+                            busy = false
+                        }
+                    },
+                    enabled = !busy,
+                ) { Text("Extract weights") }
+
+                Button(
+                    onClick = {
+                        if (meta != null) {
+                            scope.launch {
+                                busy = true
+                                message = ModelPrep.extractAndQuantize(context, meta).fold(
+                                    onSuccess = { "Quantized model downloaded" },
+                                    onFailure = { "Quantize failed: ${it.message}" },
+                                )
+                                refresh()
+                                busy = false
+                            }
+                        }
+                    },
+                    enabled = !busy && meta != null,
+                ) { Text("Download quantized") }
+            }
+
+            val quantText = when (quant) {
+                QuantStatus.MISSING -> "Quantized model: none"
+                QuantStatus.OUTDATED -> "Quantized model: outdated (re-quantize)"
+                QuantStatus.CURRENT -> "Quantized model: up to date"
+            }
+            Text(
+                "Weights: ${if (weightsPresent) "extracted" else "none"}  ·  $quantText",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            message?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+            }
         }
     }
 }
