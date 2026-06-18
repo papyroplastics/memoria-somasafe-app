@@ -3,6 +3,7 @@ package app.somasafe.backend
 import android.content.Context
 import app.somasafe.BuildConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -42,6 +43,7 @@ data class RemoteModel(
 ) {
     val trainableEndpoint: String get() = "$BACKEND_URL/model/trainable/$key/$modelId"
     val quantizeEndpoint: String get() = "$BACKEND_URL/model/quantize/$key/$modelId"
+    fun resultEndpoint(jobId: String): String = "$BACKEND_URL/model/quantize/result/$jobId"
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("key", key)
@@ -132,11 +134,16 @@ suspend fun downloadModel(url: String, dest: File): Result<Unit> =
         }
     }
 
-/** POST a JSON weights body and stream the returned tflite into [dest]. */
-suspend fun postQuantize(url: String, jsonBody: ByteArray, dest: File): Result<Unit> =
+const val QUANTIZE_POLL_INTERVAL_MS = 1000L
+const val QUANTIZE_POLL_TIMEOUT_MS = 120_000L
+
+/**
+ * POST a JSON weights body to the (async) /quantize endpoint and return the
+ * job id to poll. The gateway enqueues the work and replies `202 {job_id}`.
+ */
+suspend fun submitQuantize(url: String, jsonBody: ByteArray): Result<String> =
     withContext(Dispatchers.IO) {
         runCatching {
-            dest.parentFile?.mkdirs()
             val connection = URL(url).openConnection() as HttpURLConnection
             try {
                 connection.requestMethod = "POST"
@@ -145,11 +152,9 @@ suspend fun postQuantize(url: String, jsonBody: ByteArray, dest: File): Result<U
                 connection.outputStream.use { it.write(jsonBody) }
 
                 val code = connection.responseCode
-                if (code != HttpURLConnection.HTTP_OK) error("HTTP $code")
-                connection.inputStream.use { input ->
-                    dest.outputStream().use { output -> input.copyTo(output) }
-                }
-                Unit
+                if (code != HttpURLConnection.HTTP_ACCEPTED) error("HTTP $code")
+                val body = connection.inputStream.bufferedReader().readText()
+                JSONObject(body).getString("job_id")
             } finally {
                 connection.disconnect()
             }
@@ -157,17 +162,58 @@ suspend fun postQuantize(url: String, jsonBody: ByteArray, dest: File): Result<U
     }
 
 /**
- * Send the already-extracted `weights.json` to the backend and store the
- * returned int8 model as `quantized.tflite`. Fails if weights have not been
- * extracted yet (weight extraction needs the LiteRT runtime and lives in the
- * model module).
+ * Poll the result endpoint until the worker has produced the int8 model,
+ * streaming it into [dest]. `202` means still pending/running (keep waiting),
+ * `200` carries the tflite, anything else (e.g. `422` failed) is an error.
+ */
+suspend fun pollQuantizeResult(url: String, dest: File): Result<Unit> =
+    withContext(Dispatchers.IO) {
+        runCatching {
+            dest.parentFile?.mkdirs()
+            val deadline = System.currentTimeMillis() + QUANTIZE_POLL_TIMEOUT_MS
+            var done = false
+            while (!done) {
+                val connection = URL(url).openConnection() as HttpURLConnection
+                val pending = try {
+                    connection.connect()
+                    when (val code = connection.responseCode) {
+                        HttpURLConnection.HTTP_OK -> {
+                            connection.inputStream.use { input ->
+                                dest.outputStream().use { output -> input.copyTo(output) }
+                            }
+                            done = true
+                            false
+                        }
+                        HttpURLConnection.HTTP_ACCEPTED -> true
+                        else -> {
+                            val err = connection.errorStream?.bufferedReader()?.readText().orEmpty()
+                            error("HTTP $code: $err")
+                        }
+                    }
+                } finally {
+                    connection.disconnect()
+                }
+                if (pending) {
+                    if (System.currentTimeMillis() >= deadline) error("quantization timed out")
+                    delay(QUANTIZE_POLL_INTERVAL_MS)
+                }
+            }
+        }
+    }
+
+/**
+ * Send the already-extracted `weights.json` to the backend, then poll for the
+ * resulting int8 model and store it as `quantized.tflite`. Fails if weights
+ * have not been extracted yet (weight extraction needs the LiteRT runtime and
+ * lives in the model module).
  */
 suspend fun downloadQuantized(context: Context, model: RemoteModel): Result<Unit> =
     withContext(Dispatchers.IO) {
         runCatching {
             val weights = weightsFile(context, model.key)
             require(weights.exists()) { "weights not extracted yet" }
-            postQuantize(model.quantizeEndpoint, weights.readBytes(), quantizedFile(context, model.key))
+            val jobId = submitQuantize(model.quantizeEndpoint, weights.readBytes()).getOrThrow()
+            pollQuantizeResult(model.resultEndpoint(jobId), quantizedFile(context, model.key))
                 .getOrThrow()
         }
     }
