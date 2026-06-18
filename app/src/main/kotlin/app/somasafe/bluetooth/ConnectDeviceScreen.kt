@@ -23,7 +23,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,13 +47,13 @@ private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
 @SuppressLint("MissingPermission")
 @Composable
-fun ConnectDeviceScreen(device: BluetoothDevice, modifier: Modifier = Modifier) {
+fun ConnectDeviceScreen(
+    device: BluetoothDevice,
+    connection: BleConnection,
+    controller: CaptureController,
+    modifier: Modifier = Modifier,
+) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val connection = rememberBleConnection(device)
-    val controller = remember(connection) {
-        CaptureController(context.applicationContext, connection, scope)
-    }
 
     val connectionState by connection.connectionState.collectAsStateWithLifecycle()
     val mtu by connection.mtu.collectAsStateWithLifecycle()

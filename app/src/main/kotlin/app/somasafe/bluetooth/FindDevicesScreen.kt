@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
 private val ML_SERVICE_UUID = UUID.fromString("a4523840-7543-2492-fe43-b7dad4432738")
+private val PPG_SERVICE_UUID = UUID.fromString("c7e4f210-3a8b-4d56-9c2f-1e7b0a5d3c8e")
 
 @SuppressLint("MissingPermission")
 @Composable
@@ -61,6 +62,8 @@ fun FindDevicesScreen(modifier: Modifier = Modifier, onDeviceSelected: (Bluetoot
   val scanSettings = ScanSettings.Builder()
   .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
   .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
+  .setLegacy(false)
+  .setPhy(ScanSettings.PHY_LE_ALL_SUPPORTED)
   .build()
 
   if (scanning) {
@@ -201,7 +204,8 @@ private fun BLEScanEffect(
     }
 
     val filters = listOf(
-      ScanFilter.Builder().setServiceUuid(ParcelUuid(ML_SERVICE_UUID)).build()
+      ScanFilter.Builder().setServiceUuid(ParcelUuid(ML_SERVICE_UUID)).build(),
+      ScanFilter.Builder().setServiceUuid(ParcelUuid(PPG_SERVICE_UUID)).build()
     )
     adapter.bluetoothLeScanner?.startScan(filters, scanSettings, callback)
 
