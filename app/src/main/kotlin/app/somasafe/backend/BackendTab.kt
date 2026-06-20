@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -14,7 +15,9 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -26,6 +29,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -43,14 +48,21 @@ fun BackendDownloadScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    var loggedIn by remember { mutableStateOf(AuthStore.isLoggedIn(context)) }
+    var username by remember { mutableStateOf(AuthStore.username(context).orEmpty()) }
+
     var listState by remember { mutableStateOf<ModelListState>(ModelListState.Loading) }
     val downloadStates = remember { mutableStateMapOf<String, DownloadState>() }
     val quantizeStates = remember { mutableStateMapOf<String, DownloadState>() }
     val localMetas = remember { mutableStateMapOf<String, RemoteModel>() }
     val weightsPresent = remember { mutableStateMapOf<String, Boolean>() }
 
-    LaunchedEffect(Unit) {
-        listState = fetchModels().fold(
+    LaunchedEffect(loggedIn) {
+        if (!loggedIn) {
+            listState = ModelListState.Loading
+            return@LaunchedEffect
+        }
+        listState = fetchModels(context).fold(
             onSuccess = { ModelListState.Loaded(it) },
             onFailure = { ModelListState.Error(it.message ?: "Unknown error") },
         )
@@ -80,6 +92,33 @@ fun BackendDownloadScreen(modifier: Modifier = Modifier) {
         )
 
         HorizontalDivider()
+
+        SessionHeader(
+            loggedIn = loggedIn,
+            username = username,
+            onSignedIn = { user ->
+                username = user
+                loggedIn = true
+            },
+            onSignedOut = {
+                loggedIn = false
+                localMetas.clear()
+                weightsPresent.clear()
+                downloadStates.clear()
+                quantizeStates.clear()
+            },
+        )
+
+        HorizontalDivider()
+
+        if (!loggedIn) {
+            Text(
+                "Sign in to browse and download models.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            return@Column
+        }
 
         when (val state = listState) {
             ModelListState.Loading ->
@@ -111,7 +150,7 @@ fun BackendDownloadScreen(modifier: Modifier = Modifier) {
                             scope.launch {
                                 downloadStates[model.key] = DownloadState.InProgress
                                 val dest = File(modelDir(context, model.key), TRAINABLE_FILENAME)
-                                val result = downloadModel(model.trainableEndpoint, dest)
+                                val result = downloadModel(context, model.trainableEndpoint, dest)
                                 if (result.isSuccess) {
                                     withContext(Dispatchers.IO) { saveModelMeta(context, model) }
                                     localMetas[model.key] = model
@@ -134,6 +173,87 @@ fun BackendDownloadScreen(modifier: Modifier = Modifier) {
                         },
                     )
                 }
+        }
+    }
+}
+
+@Composable
+private fun SessionHeader(
+    loggedIn: Boolean,
+    username: String,
+    onSignedIn: (String) -> Unit,
+    onSignedOut: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    if (loggedIn) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Signed in as $username",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            TextButton(onClick = {
+                scope.launch {
+                    logout(context)
+                    onSignedOut()
+                }
+            }) { Text("Log out") }
+        }
+        return
+    }
+
+    var user by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var signingIn by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Sign in", style = MaterialTheme.typography.titleMedium)
+        OutlinedTextField(
+            value = user,
+            onValueChange = { user = it },
+            label = { Text("Username") },
+            singleLine = true,
+            enabled = !signingIn,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = { Text("Password") },
+            singleLine = true,
+            enabled = !signingIn,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        error?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        Button(
+            enabled = !signingIn && user.isNotBlank() && password.isNotBlank(),
+            onClick = {
+                scope.launch {
+                    signingIn = true
+                    error = null
+                    login(context, user.trim(), password).fold(
+                        onSuccess = { onSignedIn(user.trim()) },
+                        onFailure = { error = it.message ?: "Sign in failed" },
+                    )
+                    signingIn = false
+                }
+            },
+        ) {
+            if (signingIn) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            } else {
+                Text("Sign in")
+            }
         }
     }
 }

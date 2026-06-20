@@ -42,6 +42,7 @@ data class RemoteModel(
     val modelId: Int,
 ) {
     val trainableEndpoint: String get() = "$BACKEND_URL/model/trainable/$key/$modelId"
+    val quantizedEndpoint: String get() = "$BACKEND_URL/model/quantized/$key/$modelId"
     val quantizeEndpoint: String get() = "$BACKEND_URL/model/quantize/$key/$modelId"
     fun resultEndpoint(jobId: String): String = "$BACKEND_URL/model/quantize/result/$jobId"
 
@@ -98,39 +99,63 @@ sealed interface DownloadState {
     data class Error(val message: String) : DownloadState
 }
 
-suspend fun fetchModels(): Result<List<RemoteModel>> =
-    withContext(Dispatchers.IO) {
-        runCatching {
-            val connection = URL("$BACKEND_URL/model/list").openConnection() as HttpURLConnection
+/** Raised when the backend rejects a request because no session is present. */
+class NotSignedInException : Exception("Not signed in")
+
+private fun rateLimitMessage(connection: HttpURLConnection): String {
+    val retry = connection.getHeaderField("Retry-After")
+    return if (retry != null) "Rate limited; retry in ${retry}s" else "Rate limited; try again later"
+}
+
+/**
+ * Run an authenticated request against [url], attaching the stored bearer token.
+ * On a `401` it refreshes the access token once and retries. [configure] sets
+ * the method/body (re-run per attempt); [onSuccess] reads the 2xx response.
+ * `429` is surfaced as a rate-limit error with the Retry-After hint.
+ */
+private suspend fun <T> authedRequest(
+    context: Context,
+    url: String,
+    configure: (HttpURLConnection) -> Unit = {},
+    onSuccess: (HttpURLConnection) -> T,
+): Result<T> = withContext(Dispatchers.IO) {
+    runCatching {
+        var token = AuthStore.accessToken(context) ?: throw NotSignedInException()
+        repeat(2) { attempt ->
+            val connection = URL(url).openConnection() as HttpURLConnection
             try {
-                connection.connect()
+                connection.setRequestProperty("Authorization", "Bearer $token")
+                configure(connection)
                 val code = connection.responseCode
-                if (code != HttpURLConnection.HTTP_OK) error("HTTP $code")
-                val body = connection.inputStream.bufferedReader().readText()
-                val array = JSONArray(body)
-                List(array.length()) { i -> RemoteModel.fromJson(array.getJSONObject(i)) }
+                when {
+                    code == HttpURLConnection.HTTP_UNAUTHORIZED && attempt == 0 ->
+                        token = refreshAccess(context).getOrElse { throw NotSignedInException() }
+                    code in 200..299 -> return@runCatching onSuccess(connection)
+                    code == 429 -> error(rateLimitMessage(connection))
+                    else -> {
+                        val err = connection.errorStream?.bufferedReader()?.readText().orEmpty()
+                        error("HTTP $code${if (err.isNotBlank()) ": $err" else ""}")
+                    }
+                }
             } finally {
                 connection.disconnect()
             }
         }
+        throw NotSignedInException()
+    }
+}
+
+suspend fun fetchModels(context: Context): Result<List<RemoteModel>> =
+    authedRequest(context, "$BACKEND_URL/model/list") { connection ->
+        val array = JSONArray(connection.inputStream.bufferedReader().readText())
+        List(array.length()) { i -> RemoteModel.fromJson(array.getJSONObject(i)) }
     }
 
-suspend fun downloadModel(url: String, dest: File): Result<Unit> =
-    withContext(Dispatchers.IO) {
-        runCatching {
-            dest.parentFile?.mkdirs()
-            val connection = URL(url).openConnection() as HttpURLConnection
-            try {
-                connection.connect()
-                val code = connection.responseCode
-                if (code != HttpURLConnection.HTTP_OK) error("HTTP $code")
-                connection.inputStream.use { input ->
-                    dest.outputStream().use { output -> input.copyTo(output) }
-                }
-                Unit
-            } finally {
-                connection.disconnect()
-            }
+suspend fun downloadModel(context: Context, url: String, dest: File): Result<Unit> =
+    authedRequest(context, url) { connection ->
+        dest.parentFile?.mkdirs()
+        connection.inputStream.use { input ->
+            dest.outputStream().use { output -> input.copyTo(output) }
         }
     }
 
@@ -141,41 +166,37 @@ const val QUANTIZE_POLL_TIMEOUT_MS = 120_000L
  * POST a JSON weights body to the (async) /quantize endpoint and return the
  * job id to poll. The gateway enqueues the work and replies `202 {job_id}`.
  */
-suspend fun submitQuantize(url: String, jsonBody: ByteArray): Result<String> =
-    withContext(Dispatchers.IO) {
-        runCatching {
-            val connection = URL(url).openConnection() as HttpURLConnection
-            try {
-                connection.requestMethod = "POST"
-                connection.doOutput = true
-                connection.setRequestProperty("Content-Type", "application/json")
-                connection.outputStream.use { it.write(jsonBody) }
-
-                val code = connection.responseCode
-                if (code != HttpURLConnection.HTTP_ACCEPTED) error("HTTP $code")
-                val body = connection.inputStream.bufferedReader().readText()
-                JSONObject(body).getString("job_id")
-            } finally {
-                connection.disconnect()
-            }
-        }
-    }
+suspend fun submitQuantize(context: Context, url: String, jsonBody: ByteArray): Result<String> =
+    authedRequest(
+        context, url,
+        configure = { connection ->
+            connection.requestMethod = "POST"
+            connection.doOutput = true
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.outputStream.use { it.write(jsonBody) }
+        },
+        onSuccess = { connection ->
+            JSONObject(connection.inputStream.bufferedReader().readText()).getString("job_id")
+        },
+    )
 
 /**
  * Poll the result endpoint until the worker has produced the int8 model,
  * streaming it into [dest]. `202` means still pending/running (keep waiting),
  * `200` carries the tflite, anything else (e.g. `422` failed) is an error.
+ * A `401` mid-poll triggers a token refresh and the poll continues.
  */
-suspend fun pollQuantizeResult(url: String, dest: File): Result<Unit> =
+suspend fun pollQuantizeResult(context: Context, url: String, dest: File): Result<Unit> =
     withContext(Dispatchers.IO) {
         runCatching {
             dest.parentFile?.mkdirs()
+            var token = AuthStore.accessToken(context) ?: throw NotSignedInException()
             val deadline = System.currentTimeMillis() + QUANTIZE_POLL_TIMEOUT_MS
             var done = false
             while (!done) {
                 val connection = URL(url).openConnection() as HttpURLConnection
                 val pending = try {
-                    connection.connect()
+                    connection.setRequestProperty("Authorization", "Bearer $token")
                     when (val code = connection.responseCode) {
                         HttpURLConnection.HTTP_OK -> {
                             connection.inputStream.use { input ->
@@ -185,6 +206,11 @@ suspend fun pollQuantizeResult(url: String, dest: File): Result<Unit> =
                             false
                         }
                         HttpURLConnection.HTTP_ACCEPTED -> true
+                        HttpURLConnection.HTTP_UNAUTHORIZED -> {
+                            token = refreshAccess(context).getOrElse { throw NotSignedInException() }
+                            true
+                        }
+                        429 -> error(rateLimitMessage(connection))
                         else -> {
                             val err = connection.errorStream?.bufferedReader()?.readText().orEmpty()
                             error("HTTP $code: $err")
@@ -212,8 +238,8 @@ suspend fun downloadQuantized(context: Context, model: RemoteModel): Result<Unit
         runCatching {
             val weights = weightsFile(context, model.key)
             require(weights.exists()) { "weights not extracted yet" }
-            val jobId = submitQuantize(model.quantizeEndpoint, weights.readBytes()).getOrThrow()
-            pollQuantizeResult(model.resultEndpoint(jobId), quantizedFile(context, model.key))
+            val jobId = submitQuantize(context, model.quantizeEndpoint, weights.readBytes()).getOrThrow()
+            pollQuantizeResult(context, model.resultEndpoint(jobId), quantizedFile(context, model.key))
                 .getOrThrow()
         }
     }
