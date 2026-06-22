@@ -32,6 +32,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.somasafe.backend.LocalModel
 import app.somasafe.backend.listLocalModels
+import app.somasafe.capture.AttestState
 import app.somasafe.capture.CaptureController
 import app.somasafe.capture.CaptureState
 import app.somasafe.capture.GroupSummary
@@ -60,6 +61,7 @@ fun ConnectDeviceScreen(
     val services by connection.services.collectAsStateWithLifecycle()
     val modelState by controller.model.collectAsStateWithLifecycle()
     val captureState by controller.capture.collectAsStateWithLifecycle()
+    val attestState by controller.attest.collectAsStateWithLifecycle()
     val status by controller.status.collectAsStateWithLifecycle()
     val groups by controller.groupSummaries.collectAsStateWithLifecycle(initialValue = emptyList())
 
@@ -83,6 +85,12 @@ fun ConnectDeviceScreen(
         Text("Name: ${device.name ?: "N/A"} (${device.address})")
         Text("Status: ${connectionState.toConnectionString()}")
         Text("MTU: ${if (mtu >= 0) mtu.toString() else "N/A"}")
+
+        AttestCard(
+            attestState = attestState,
+            connected = connected,
+            onAttest = controller::attestDevice,
+        )
 
         ModelCard(
             models = localModels,
@@ -110,6 +118,42 @@ fun ConnectDeviceScreen(
         if (services.isNotEmpty()) {
             Text("GATT services", style = MaterialTheme.typography.titleMedium)
             services.forEach { ServiceItem(it) }
+        }
+    }
+}
+
+@Composable
+private fun AttestCard(
+    attestState: AttestState,
+    connected: Boolean,
+    onAttest: () -> Unit,
+) {
+    Card {
+        Column(
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Attestation", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Prove ownership of this device to unlock model downloads.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Button(
+                onClick = onAttest,
+                enabled = connected && attestState !is AttestState.InProgress,
+            ) {
+                Text(if (attestState is AttestState.InProgress) "Attesting…" else "Attest device")
+            }
+
+            val (text, color) = when (val s = attestState) {
+                AttestState.Idle -> "Not attested" to MaterialTheme.colorScheme.onSurfaceVariant
+                AttestState.InProgress -> "Signing challenge…" to MaterialTheme.colorScheme.onSurfaceVariant
+                is AttestState.Attested -> "Attested: ${s.serial}" to MaterialTheme.colorScheme.primary
+                is AttestState.Error -> "Error: ${s.message}" to MaterialTheme.colorScheme.error
+            }
+            Text(text, style = MaterialTheme.typography.bodySmall, color = color)
         }
     }
 }

@@ -2,14 +2,18 @@ package app.somasafe.capture
 
 import android.content.Context
 import android.util.Log
+import app.somasafe.backend.completeAttestation
 import app.somasafe.backend.quantizedFile
+import app.somasafe.backend.requestChallenge
 import app.somasafe.bluetooth.BleConnection
 import app.somasafe.device.ClientBuffer
+import app.somasafe.device.DeviceService
 import app.somasafe.device.ML_ERROR_NAMES
 import app.somasafe.device.MlResult
 import app.somasafe.device.MlService
 import app.somasafe.device.PpgSample
 import app.somasafe.device.PpgService
+import app.somasafe.device.SomaSafeUuids
 import app.somasafe.model.LiteRtModel
 import app.somasafe.model.TensorInfo
 import kotlinx.coroutines.Dispatchers
@@ -37,6 +41,13 @@ sealed interface CaptureState {
     data class Running(val groupId: Long) : CaptureState
 }
 
+sealed interface AttestState {
+    data object Idle : AttestState
+    data object InProgress : AttestState
+    data class Attested(val serial: String) : AttestState
+    data class Error(val message: String) : AttestState
+}
+
 /**
  * Drives a capture session against a connected device: stage a model, then
  * start/stop collecting PPG windows and ML results, merging them by sequence
@@ -59,6 +70,9 @@ class CaptureController(
     private val _capture = MutableStateFlow<CaptureState>(CaptureState.Idle)
     val capture = _capture.asStateFlow()
 
+    private val _attest = MutableStateFlow<AttestState>(AttestState.Idle)
+    val attest = _attest.asStateFlow()
+
     private val _status = MutableStateFlow<String?>(null)
     val status = _status.asStateFlow()
 
@@ -76,15 +90,44 @@ class CaptureController(
                 val (featuresLen, scoreLen) =
                     withContext(Dispatchers.Default) { introspect(file.absolutePath) }
 
-                val buffer = ClientBuffer(connection)
-                buffer.upload(bytes)
-                buffer.ready()
+                val buffer = ClientBuffer(connection, SomaSafeUuids.ML_SVC)
+                buffer.start()
+                try {
+                    buffer.upload(bytes)
+                    buffer.ready()
+                } finally {
+                    buffer.stop()
+                }
 
                 _model.value = ModelState.Loaded(key, featuresLen, scoreLen)
                 _status.value = "Model \"$key\" loaded (${bytes.size} bytes)"
             } catch (e: Exception) {
                 Log.e(TAG, "model load failed", e)
                 _model.value = ModelState.Error(e.message ?: "load failed")
+            }
+        }
+    }
+
+    /**
+     * Prove ownership of the connected device: read its serial, request a
+     * challenge from the backend, have the device sign the canonical payload,
+     * and submit the signature to complete attestation.
+     */
+    fun attestDevice() {
+        if (_attest.value is AttestState.InProgress) return
+        scope.launch {
+            _attest.value = AttestState.InProgress
+            try {
+                val device = DeviceService(connection)
+                val serial = device.readSerial()
+                val challenge = requestChallenge(context, serial).getOrThrow()
+                val signature = device.sign(challenge.payload(serial))
+                completeAttestation(context, challenge.instanceId, signature).getOrThrow()
+                _attest.value = AttestState.Attested(serial)
+                _status.value = "Device \"$serial\" attested"
+            } catch (e: Exception) {
+                Log.e(TAG, "attestation failed", e)
+                _attest.value = AttestState.Error(e.message ?: "attestation failed")
             }
         }
     }

@@ -269,7 +269,10 @@ private fun ModelDownloadCard(
     onDownload: () -> Unit,
     onQuantize: () -> Unit,
 ) {
-    val isUpToDate = localMeta != null && localMeta.modelId == model.modelId
+    // Up to date only if both the architecture and the weights match upstream.
+    val isUpToDate = localMeta != null &&
+        localMeta.fingerprint == model.fingerprint &&
+        localMeta.weightsVersion == model.weightsVersion
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -287,15 +290,19 @@ private fun ModelDownloadCard(
 
             if (localMeta != null) {
                 Text(
-                    "Downloaded: v${localMeta.modelId}",
+                    "Downloaded: v${localMeta.version}  ·  ${localMeta.fingerprint.take(8)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
             if (!isUpToDate) {
+                val upstream = buildString {
+                    append("Upstream: v${model.version}  ·  ${model.fingerprint.take(8)}")
+                    model.weightsVersion?.let { append("  ·  ${it.take(10)}") }
+                }
                 Text(
-                    "Upstream: v${model.modelId}  ·  ${model.lastUpdated.take(10)}",
+                    upstream,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
                 )

@@ -147,6 +147,17 @@ class BleConnection(
             ?.flatMap { it.characteristics }
             ?.firstNotNullOfOrNull { it.getDescriptor(uuid) }
 
+    /**
+     * Resolve a characteristic within a specific service. Necessary when the
+     * same characteristic UUID appears in more than one service (e.g. the client
+     * buffer attributes shared by the ML and device services).
+     */
+    fun characteristic(serviceUuid: UUID, charUuid: UUID): BluetoothGattCharacteristic? =
+        gatt?.getService(serviceUuid)?.getCharacteristic(charUuid)
+
+    fun descriptor(serviceUuid: UUID, charUuid: UUID, dscUuid: UUID): BluetoothGattDescriptor? =
+        characteristic(serviceUuid, charUuid)?.getDescriptor(dscUuid)
+
     suspend fun readCharacteristic(chr: BluetoothGattCharacteristic): ByteArray =
         op { it.readCharacteristic(chr) }
 
