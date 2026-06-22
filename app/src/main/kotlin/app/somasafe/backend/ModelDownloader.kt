@@ -17,6 +17,10 @@ const val QUANTIZED_FILENAME = "quantized.tflite"
 const val WEIGHTS_FILENAME = "weights.json"
 const val META_FILENAME = "meta.json"
 
+const val FINGERPRINT_HEADER = "X-Model-Fingerprint"
+const val WEIGHTS_ID_HEADER = "X-Weights-ID"
+const val WEIGHTS_TIMESTAMP_HEADER = "X-Weights-Timestamp"
+
 fun modelsDir(context: Context): File = File(context.filesDir, "models")
 
 fun modelDir(context: Context, key: String): File = File(modelsDir(context), key)
@@ -29,42 +33,47 @@ fun trainableFile(context: Context, key: String): File = File(modelDir(context, 
 /** Int8-quantized model produced by the backend from extracted weights; uploaded to the device. */
 fun quantizedFile(context: Context, key: String): File = File(modelDir(context, key), QUANTIZED_FILENAME)
 
-/** Trainable weights extracted on-device, in the JSON shape the /quantize endpoint expects. */
+/** Trainable weights extracted on-device (`{parameters: [...]}`); the `weights_id`
+ *  the /quantize endpoint also needs is attached at submit time from /weights. */
 fun weightsFile(context: Context, key: String): File = File(modelDir(context, key), WEIGHTS_FILENAME)
 
 data class RemoteModel(
     val key: String,
     val name: String,
-    val lastUpdated: String,
     val purpose: String,
     val firmwareId: Int?,
     val appVersion: String,
-    val modelId: Int,
+    val fingerprint: String,        // architecture identity (weight-compatibility key)
+    val version: String,            // human-facing display label
+    val weightsVersion: String?,    // timestamp of the latest global weights (null if none)
 ) {
-    val trainableEndpoint: String get() = "$BACKEND_URL/model/trainable/$key/$modelId"
-    val quantizedEndpoint: String get() = "$BACKEND_URL/model/quantized/$key/$modelId"
-    val quantizeEndpoint: String get() = "$BACKEND_URL/model/quantize/$key/$modelId"
+    val trainableEndpoint: String get() = "$BACKEND_URL/model/download/trainable/$key"
+    val quantizedEndpoint: String get() = "$BACKEND_URL/model/download/quantized/$key"
+    val quantizeEndpoint: String get() = "$BACKEND_URL/model/quantize/$key"
+    val weightsEndpoint: String get() = "$BACKEND_URL/model/weights/$key"
     fun resultEndpoint(jobId: String): String = "$BACKEND_URL/model/quantize/result/$jobId"
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("key", key)
         put("name", name)
-        put("last_updated", lastUpdated)
         put("purpose", purpose)
         if (firmwareId != null) put("firmware_id", firmwareId) else put("firmware_id", JSONObject.NULL)
         put("app_version", appVersion)
-        put("model_id", modelId)
+        put("fingerprint", fingerprint)
+        put("version", version)
+        if (weightsVersion != null) put("weights_version", weightsVersion) else put("weights_version", JSONObject.NULL)
     }
 
     companion object {
         fun fromJson(obj: JSONObject): RemoteModel = RemoteModel(
             key = obj.getString("key"),
             name = obj.getString("name"),
-            lastUpdated = obj.getString("last_updated"),
             purpose = obj.getString("purpose"),
             firmwareId = if (obj.isNull("firmware_id")) null else obj.getInt("firmware_id"),
             appVersion = obj.getString("app_version"),
-            modelId = obj.getInt("model_id"),
+            fingerprint = obj.getString("fingerprint"),
+            version = obj.getString("version"),
+            weightsVersion = if (obj.isNull("weights_version")) null else obj.getString("weights_version"),
         )
     }
 }
@@ -113,7 +122,7 @@ private fun rateLimitMessage(connection: HttpURLConnection): String {
  * the method/body (re-run per attempt); [onSuccess] reads the 2xx response.
  * `429` is surfaced as a rate-limit error with the Retry-After hint.
  */
-private suspend fun <T> authedRequest(
+internal suspend fun <T> authedRequest(
     context: Context,
     url: String,
     configure: (HttpURLConnection) -> Unit = {},
@@ -157,6 +166,21 @@ suspend fun downloadModel(context: Context, url: String, dest: File): Result<Uni
         connection.inputStream.use { input ->
             dest.outputStream().use { output -> input.copyTo(output) }
         }
+    }
+
+/** Version metadata for a model's latest global weights, read from the headers
+ *  the /weights endpoint sets. ``weightsId`` is echoed back to /quantize. */
+data class WeightsInfo(val weightsId: Long, val timestamp: String?, val fingerprint: String?)
+
+suspend fun fetchWeightsInfo(context: Context, model: RemoteModel): Result<WeightsInfo> =
+    authedRequest(context, model.weightsEndpoint) { connection ->
+        val id = connection.getHeaderField(WEIGHTS_ID_HEADER)
+            ?: error("missing $WEIGHTS_ID_HEADER header")
+        WeightsInfo(
+            weightsId = id.toLong(),
+            timestamp = connection.getHeaderField(WEIGHTS_TIMESTAMP_HEADER),
+            fingerprint = connection.getHeaderField(FINGERPRINT_HEADER),
+        )
     }
 
 const val QUANTIZE_POLL_INTERVAL_MS = 1000L
@@ -238,7 +262,13 @@ suspend fun downloadQuantized(context: Context, model: RemoteModel): Result<Unit
         runCatching {
             val weights = weightsFile(context, model.key)
             require(weights.exists()) { "weights not extracted yet" }
-            val jobId = submitQuantize(context, model.quantizeEndpoint, weights.readBytes()).getOrThrow()
+            // Tag the submission with the global-weights snapshot it derives from,
+            // so aggregation knows the base each update was trained against.
+            val info = fetchWeightsInfo(context, model).getOrThrow()
+            val body = JSONObject(weights.readText())
+                .apply { put("weights_id", info.weightsId) }
+                .toString().toByteArray()
+            val jobId = submitQuantize(context, model.quantizeEndpoint, body).getOrThrow()
             pollQuantizeResult(context, model.resultEndpoint(jobId), quantizedFile(context, model.key))
                 .getOrThrow()
         }

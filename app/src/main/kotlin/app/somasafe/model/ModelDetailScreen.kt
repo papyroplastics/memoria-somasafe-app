@@ -225,7 +225,7 @@ private fun ModelMetaCard(meta: RemoteModel) {
             ) {
                 Text(meta.name, style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "v${meta.modelId}  ·  ${meta.lastUpdated.take(10)}",
+                    "v${meta.version}  ·  ${meta.fingerprint.take(8)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
