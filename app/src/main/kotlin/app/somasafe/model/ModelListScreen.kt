@@ -20,9 +20,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import app.somasafe.backend.QuantStatus
 import app.somasafe.backend.TRAINABLE_FILENAME
 import app.somasafe.backend.loadModelMeta
 import app.somasafe.backend.modelsDir
+import app.somasafe.backend.quantStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -49,7 +51,7 @@ fun ModelListScreen(modifier: Modifier = Modifier, onModelSelected: (String) -> 
                     val trainable = File(dir, TRAINABLE_FILENAME)
                     if (!trainable.exists()) return@mapNotNull null
                     val displayName = loadModelMeta(context, dir.name)?.name ?: dir.name
-                    LocalModelEntry(dir.name, trainable, displayName, ModelPrep.quantStatus(context, dir.name))
+                    LocalModelEntry(dir.name, trainable, displayName, quantStatus(context, dir.name))
                 }
                 ?: emptyList()
         }

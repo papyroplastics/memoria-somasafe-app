@@ -33,8 +33,9 @@ fun trainableFile(context: Context, key: String): File = File(modelDir(context, 
 /** Int8-quantized model produced by the backend from extracted weights; uploaded to the device. */
 fun quantizedFile(context: Context, key: String): File = File(modelDir(context, key), QUANTIZED_FILENAME)
 
-/** Trainable weights extracted on-device (`{parameters: [...]}`); the `weights_id`
- *  the /quantize endpoint also needs is attached at submit time from /weights. */
+/** Local source of truth for the model's weights (`weights.json`): the flat
+ *  parameters plus the version metadata (`weights_id`, version, fingerprint) the
+ *  /quantize endpoint needs. Pulled from the backend, not extracted from the model. */
 fun weightsFile(context: Context, key: String): File = File(modelDir(context, key), WEIGHTS_FILENAME)
 
 data class RemoteModel(
@@ -168,21 +169,6 @@ suspend fun downloadModel(context: Context, url: String, dest: File): Result<Uni
         }
     }
 
-/** Version metadata for a model's latest global weights, read from the headers
- *  the /weights endpoint sets. ``weightsId`` is echoed back to /quantize. */
-data class WeightsInfo(val weightsId: Long, val timestamp: String?, val fingerprint: String?)
-
-suspend fun fetchWeightsInfo(context: Context, model: RemoteModel): Result<WeightsInfo> =
-    authedRequest(context, model.weightsEndpoint) { connection ->
-        val id = connection.getHeaderField(WEIGHTS_ID_HEADER)
-            ?: error("missing $WEIGHTS_ID_HEADER header")
-        WeightsInfo(
-            weightsId = id.toLong(),
-            timestamp = connection.getHeaderField(WEIGHTS_TIMESTAMP_HEADER),
-            fingerprint = connection.getHeaderField(FINGERPRINT_HEADER),
-        )
-    }
-
 const val QUANTIZE_POLL_INTERVAL_MS = 1000L
 const val QUANTIZE_POLL_TIMEOUT_MS = 120_000L
 
@@ -252,21 +238,19 @@ suspend fun pollQuantizeResult(context: Context, url: String, dest: File): Resul
     }
 
 /**
- * Send the already-extracted `weights.json` to the backend, then poll for the
- * resulting int8 model and store it as `quantized.tflite`. Fails if weights
- * have not been extracted yet (weight extraction needs the LiteRT runtime and
- * lives in the model module).
+ * Submit the locally stored weights to the backend, then poll for the resulting
+ * int8 model and store it as `quantized.tflite`. The submission carries the
+ * `weights_id` recorded in `weights.json` (the snapshot the parameters derive
+ * from), so aggregation knows the base each update was trained against. Fails if
+ * weights have not been downloaded yet.
  */
 suspend fun downloadQuantized(context: Context, model: RemoteModel): Result<Unit> =
     withContext(Dispatchers.IO) {
         runCatching {
-            val weights = weightsFile(context, model.key)
-            require(weights.exists()) { "weights not extracted yet" }
-            // Tag the submission with the global-weights snapshot it derives from,
-            // so aggregation knows the base each update was trained against.
-            val info = fetchWeightsInfo(context, model).getOrThrow()
-            val body = JSONObject(weights.readText())
-                .apply { put("weights_id", info.weightsId) }
+            val weights = loadWeights(context, model.key) ?: error("weights not downloaded yet")
+            val body = JSONObject()
+                .put("parameters", JSONArray().apply { weights.parameters.forEach { put(it.toDouble()) } })
+                .put("weights_id", weights.weightsId)
                 .toString().toByteArray()
             val jobId = submitQuantize(context, model.quantizeEndpoint, body).getOrThrow()
             pollQuantizeResult(context, model.resultEndpoint(jobId), quantizedFile(context, model.key))

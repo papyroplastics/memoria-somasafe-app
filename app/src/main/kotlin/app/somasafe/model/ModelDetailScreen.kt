@@ -30,11 +30,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import app.somasafe.backend.QuantStatus
 import app.somasafe.backend.RemoteModel
+import app.somasafe.backend.WeightsStatus
+import app.somasafe.backend.downloadQuantized
+import app.somasafe.backend.downloadWeights
 import app.somasafe.backend.loadModelMeta
 import app.somasafe.backend.modelDir
+import app.somasafe.backend.quantStatus
 import app.somasafe.backend.trainableFile
-import app.somasafe.backend.weightsFile
+import app.somasafe.backend.weightsStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -91,7 +96,7 @@ fun ModelDetailScreen(modelKey: String, modifier: Modifier = Modifier, onDeleted
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        ModelPrepSection(modelKey = modelKey, meta = storedMeta)
+        ModelWeightsSection(modelKey = modelKey, meta = storedMeta)
 
         storedMeta?.let { ModelMetaCard(it) }
 
@@ -139,21 +144,23 @@ fun ModelDetailScreen(modelKey: String, modifier: Modifier = Modifier, onDeleted
 }
 
 @Composable
-private fun ModelPrepSection(modelKey: String, meta: RemoteModel?) {
+private fun ModelWeightsSection(modelKey: String, meta: RemoteModel?) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var weightsPresent by remember(modelKey) { mutableStateOf(false) }
+    var weights by remember(modelKey) { mutableStateOf(WeightsStatus.MISSING) }
     var quant by remember(modelKey) { mutableStateOf(QuantStatus.MISSING) }
     var busy by remember(modelKey) { mutableStateOf(false) }
     var message by remember(modelKey) { mutableStateOf<String?>(null) }
 
+    // Read meta.json fresh: downloadWeights advances its upstream weights pointer,
+    // so the in-memory snapshot would otherwise look stale right after a pull.
     suspend fun refresh() = withContext(Dispatchers.IO) {
-        weightsPresent = weightsFile(context, modelKey).exists()
-        quant = ModelPrep.quantStatus(context, modelKey)
+        weights = loadModelMeta(context, modelKey)?.let { weightsStatus(context, it) } ?: WeightsStatus.MISSING
+        quant = quantStatus(context, modelKey)
     }
 
-    LaunchedEffect(modelKey) { refresh() }
+    LaunchedEffect(modelKey, meta) { refresh() }
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -163,25 +170,27 @@ private fun ModelPrepSection(modelKey: String, meta: RemoteModel?) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = {
-                        scope.launch {
-                            busy = true
-                            message = ModelPrep.extractWeights(context, modelKey).fold(
-                                onSuccess = { "Weights extracted" },
-                                onFailure = { "Extract failed: ${it.message}" },
-                            )
-                            refresh()
-                            busy = false
+                        if (meta != null) {
+                            scope.launch {
+                                busy = true
+                                message = downloadWeights(context, meta).fold(
+                                    onSuccess = { "Weights downloaded" },
+                                    onFailure = { "Download failed: ${it.message}" },
+                                )
+                                refresh()
+                                busy = false
+                            }
                         }
                     },
-                    enabled = !busy,
-                ) { Text("Extract weights") }
+                    enabled = !busy && meta != null,
+                ) { Text("Download weights") }
 
                 Button(
                     onClick = {
                         if (meta != null) {
                             scope.launch {
                                 busy = true
-                                message = ModelPrep.extractAndQuantize(context, meta).fold(
+                                message = downloadQuantized(context, meta).fold(
                                     onSuccess = { "Quantized model downloaded" },
                                     onFailure = { "Quantize failed: ${it.message}" },
                                 )
@@ -190,17 +199,22 @@ private fun ModelPrepSection(modelKey: String, meta: RemoteModel?) {
                             }
                         }
                     },
-                    enabled = !busy && meta != null,
+                    enabled = !busy && meta != null && weights != WeightsStatus.MISSING,
                 ) { Text("Download quantized") }
             }
 
+            val weightsText = when (weights) {
+                WeightsStatus.MISSING -> "Weights: not downloaded"
+                WeightsStatus.OUTDATED -> "Weights: outdated (re-download)"
+                WeightsStatus.CURRENT -> "Weights: up to date"
+            }
             val quantText = when (quant) {
                 QuantStatus.MISSING -> "Quantized model: none"
                 QuantStatus.OUTDATED -> "Quantized model: outdated (re-quantize)"
                 QuantStatus.CURRENT -> "Quantized model: up to date"
             }
             Text(
-                "Weights: ${if (weightsPresent) "extracted" else "none"}  ·  $quantText",
+                "$weightsText  ·  $quantText",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

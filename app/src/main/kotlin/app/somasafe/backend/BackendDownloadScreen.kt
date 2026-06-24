@@ -53,9 +53,10 @@ fun BackendDownloadScreen(modifier: Modifier = Modifier) {
 
     var listState by remember { mutableStateOf<ModelListState>(ModelListState.Loading) }
     val downloadStates = remember { mutableStateMapOf<String, DownloadState>() }
+    val weightsStates = remember { mutableStateMapOf<String, DownloadState>() }
     val quantizeStates = remember { mutableStateMapOf<String, DownloadState>() }
     val localMetas = remember { mutableStateMapOf<String, RemoteModel>() }
-    val weightsPresent = remember { mutableStateMapOf<String, Boolean>() }
+    val weightsStatuses = remember { mutableStateMapOf<String, WeightsStatus>() }
 
     LaunchedEffect(loggedIn) {
         if (!loggedIn) {
@@ -73,7 +74,7 @@ fun BackendDownloadScreen(modifier: Modifier = Modifier) {
         withContext(Dispatchers.IO) {
             loaded.models.forEach { model ->
                 loadModelMeta(context, model.key)?.let { localMetas[model.key] = it }
-                weightsPresent[model.key] = weightsFile(context, model.key).exists()
+                weightsStatuses[model.key] = weightsStatus(context, model)
             }
         }
     }
@@ -103,8 +104,9 @@ fun BackendDownloadScreen(modifier: Modifier = Modifier) {
             onSignedOut = {
                 loggedIn = false
                 localMetas.clear()
-                weightsPresent.clear()
+                weightsStatuses.clear()
                 downloadStates.clear()
+                weightsStates.clear()
                 quantizeStates.clear()
             },
         )
@@ -143,16 +145,21 @@ fun BackendDownloadScreen(modifier: Modifier = Modifier) {
                         model = model,
                         localMeta = localMetas[model.key],
                         state = downloadStates[model.key] ?: DownloadState.Idle,
+                        weightsState = weightsStates[model.key] ?: DownloadState.Idle,
                         quantizeState = quantizeStates[model.key] ?: DownloadState.Idle,
-                        showQuantize = localMetas[model.key] != null,
-                        quantizeEnabled = weightsPresent[model.key] == true,
+                        showWeights = localMetas[model.key] != null,
+                        weightsStatus = weightsStatuses[model.key] ?: WeightsStatus.MISSING,
+                        quantizeEnabled = (weightsStatuses[model.key] ?: WeightsStatus.MISSING) != WeightsStatus.MISSING,
                         onDownload = {
                             scope.launch {
                                 downloadStates[model.key] = DownloadState.InProgress
                                 val dest = File(modelDir(context, model.key), TRAINABLE_FILENAME)
                                 val result = downloadModel(context, model.trainableEndpoint, dest)
                                 if (result.isSuccess) {
-                                    withContext(Dispatchers.IO) { saveModelMeta(context, model) }
+                                    withContext(Dispatchers.IO) {
+                                        saveModelMeta(context, model)
+                                        weightsStatuses[model.key] = weightsStatus(context, model)
+                                    }
                                     localMetas[model.key] = model
                                     downloadStates[model.key] = DownloadState.Done(dest.absolutePath)
                                 } else {
@@ -160,6 +167,21 @@ fun BackendDownloadScreen(modifier: Modifier = Modifier) {
                                         result.exceptionOrNull()?.message ?: "Unknown error"
                                     )
                                 }
+                            }
+                        },
+                        onDownloadWeights = {
+                            scope.launch {
+                                weightsStates[model.key] = DownloadState.InProgress
+                                weightsStates[model.key] = downloadWeights(context, model).fold(
+                                    onSuccess = {
+                                        withContext(Dispatchers.IO) {
+                                            loadModelMeta(context, model.key)?.let { localMetas[model.key] = it }
+                                            weightsStatuses[model.key] = weightsStatus(context, model)
+                                        }
+                                        DownloadState.Done(weightsFile(context, model.key).absolutePath)
+                                    },
+                                    onFailure = { DownloadState.Error(it.message ?: "Unknown error") },
+                                )
                             }
                         },
                         onQuantize = {
@@ -263,10 +285,13 @@ private fun ModelDownloadCard(
     model: RemoteModel,
     localMeta: RemoteModel?,
     state: DownloadState,
+    weightsState: DownloadState,
     quantizeState: DownloadState,
-    showQuantize: Boolean,
+    showWeights: Boolean,
+    weightsStatus: WeightsStatus,
     quantizeEnabled: Boolean,
     onDownload: () -> Unit,
+    onDownloadWeights: () -> Unit,
     onQuantize: () -> Unit,
 ) {
     // Up to date only if both the architecture and the weights match upstream.
@@ -343,8 +368,44 @@ private fun ModelDownloadCard(
                     }
             }
 
-            if (showQuantize) {
+            if (showWeights) {
+                WeightsRow(weightsState, weightsStatus, onDownloadWeights)
                 QuantizeRow(quantizeState, quantizeEnabled, onQuantize)
+            }
+        }
+    }
+}
+
+@Composable
+private fun WeightsRow(state: DownloadState, status: WeightsStatus, onDownload: () -> Unit) {
+    when (state) {
+        DownloadState.InProgress ->
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                Text("Downloading weights…", style = MaterialTheme.typography.bodyMedium)
+            }
+
+        is DownloadState.Error -> {
+            Text(
+                "Weights error: ${state.message}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            OutlinedButton(onClick = onDownload) { Text("Retry weights") }
+        }
+
+        else -> {
+            val (statusText, statusColor) = when (status) {
+                WeightsStatus.MISSING -> "Weights: not downloaded" to MaterialTheme.colorScheme.onSurfaceVariant
+                WeightsStatus.OUTDATED -> "Weights: outdated" to MaterialTheme.colorScheme.primary
+                WeightsStatus.CURRENT -> "Weights: up to date" to MaterialTheme.colorScheme.onSurfaceVariant
+            }
+            Text(statusText, style = MaterialTheme.typography.bodySmall, color = statusColor)
+            OutlinedButton(onClick = onDownload) {
+                Text(if (status == WeightsStatus.CURRENT) "Re-download weights" else "Download weights")
             }
         }
     }
@@ -378,7 +439,7 @@ private fun QuantizeRow(state: DownloadState, enabled: Boolean, onQuantize: () -
             OutlinedButton(onClick = onQuantize, enabled = enabled) { Text("Quantize") }
             if (!enabled) {
                 Text(
-                    "Extract weights on the Model tab first.",
+                    "Download weights first.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
