@@ -33,7 +33,7 @@ import app.somasafe.bluetooth.BluetoothPermissionBox
 import app.somasafe.bluetooth.ConnectDeviceScreen
 import app.somasafe.bluetooth.FindDevicesScreen
 import app.somasafe.bluetooth.rememberBleConnection
-import app.somasafe.capture.CaptureController
+import app.somasafe.capture.DeviceController
 import app.somasafe.model.ModelDetailScreen
 import app.somasafe.model.ModelListScreen
 
@@ -78,7 +78,7 @@ fun MainScreen() {
     var device by remember { mutableStateOf<BluetoothDevice?>(null) }
     val connection = rememberBleConnection(device)
     val controller = remember(connection) {
-        connection?.let { CaptureController(context.applicationContext, it, scope) }
+        connection?.let { DeviceController(context.applicationContext, it, scope) }
     }
 
     fun goBack() {

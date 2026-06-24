@@ -33,8 +33,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.somasafe.backend.LocalModel
 import app.somasafe.backend.listLocalModels
 import app.somasafe.capture.AttestState
-import app.somasafe.capture.CaptureController
 import app.somasafe.capture.CaptureState
+import app.somasafe.capture.DeviceController
 import app.somasafe.capture.GroupSummary
 import app.somasafe.capture.ModelState
 import androidx.compose.runtime.LaunchedEffect
@@ -51,7 +51,7 @@ private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 fun ConnectDeviceScreen(
     device: BluetoothDevice,
     connection: BleConnection,
-    controller: CaptureController,
+    controller: DeviceController,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -62,6 +62,7 @@ fun ConnectDeviceScreen(
     val modelState by controller.model.collectAsStateWithLifecycle()
     val captureState by controller.capture.collectAsStateWithLifecycle()
     val attestState by controller.attest.collectAsStateWithLifecycle()
+    val ownedDevices by controller.ownedDevices.collectAsStateWithLifecycle()
     val status by controller.status.collectAsStateWithLifecycle()
     val groups by controller.groupSummaries.collectAsStateWithLifecycle(initialValue = emptyList())
 
@@ -88,6 +89,7 @@ fun ConnectDeviceScreen(
 
         AttestCard(
             attestState = attestState,
+            ownedDevices = ownedDevices,
             connected = connected,
             onAttest = controller::attestDevice,
         )
@@ -125,6 +127,7 @@ fun ConnectDeviceScreen(
 @Composable
 private fun AttestCard(
     attestState: AttestState,
+    ownedDevices: List<String>,
     connected: Boolean,
     onAttest: () -> Unit,
 ) {
@@ -154,6 +157,10 @@ private fun AttestCard(
                 is AttestState.Error -> "Error: ${s.message}" to MaterialTheme.colorScheme.error
             }
             Text(text, style = MaterialTheme.typography.bodySmall, color = color)
+
+            val owned = if (ownedDevices.isEmpty()) "No owned devices"
+                        else "Owned: ${ownedDevices.joinToString(", ")}"
+            Text(owned, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

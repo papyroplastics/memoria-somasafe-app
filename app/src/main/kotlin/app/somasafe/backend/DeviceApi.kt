@@ -2,6 +2,7 @@ package app.somasafe.backend
 
 import android.content.Context
 import android.util.Base64
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.nio.ByteBuffer
@@ -36,6 +37,13 @@ data class DeviceChallenge(
             .array()
     }
 }
+
+/** Serials of the devices the backend still considers this client to own. */
+suspend fun fetchOwnedDevices(context: Context): Result<List<String>> =
+    authedRequest(context, "$BACKEND_URL/device/owned") { connection ->
+        val array = JSONArray(connection.inputStream.bufferedReader().readText())
+        List(array.length()) { i -> array.getString(i) }
+    }
 
 suspend fun requestChallenge(context: Context, serial: String): Result<DeviceChallenge> =
     authedRequest(

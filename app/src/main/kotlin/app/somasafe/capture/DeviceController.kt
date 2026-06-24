@@ -3,6 +3,7 @@ package app.somasafe.capture
 import android.content.Context
 import android.util.Log
 import app.somasafe.backend.completeAttestation
+import app.somasafe.backend.fetchOwnedDevices
 import app.somasafe.backend.quantizedFile
 import app.somasafe.backend.requestChallenge
 import app.somasafe.bluetooth.BleConnection
@@ -27,7 +28,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-private const val TAG = "CaptureController"
+private const val TAG = "DeviceController"
 
 sealed interface ModelState {
     data object None : ModelState
@@ -49,17 +50,21 @@ sealed interface AttestState {
 }
 
 /**
- * Drives a capture session against a connected device: stage a model, then
- * start/stop collecting PPG windows and ML results, merging them by sequence
- * number into the [CaptureDatabase]. Scoped to a screen via [scope]; not
- * retained across configuration changes.
+ * Drives a connected device: ownership attestation, staging a model, and
+ * running a capture session (collecting PPG windows + ML results and merging
+ * them by sequence number into the [CaptureDatabase]). Scoped to a screen via
+ * [scope]; not retained across configuration changes.
  */
-class CaptureController(
+class DeviceController(
     private val context: Context,
     private val connection: BleConnection,
     private val scope: kotlinx.coroutines.CoroutineScope,
 ) {
     private val dao = CaptureDatabase.get(context).captureDao()
+
+    init {
+        refreshOwnership()
+    }
 
     /** Per-group rollup for the history UI; updates live as rows are written. */
     val groupSummaries = dao.groupSummaries()
@@ -72,6 +77,11 @@ class CaptureController(
 
     private val _attest = MutableStateFlow<AttestState>(AttestState.Idle)
     val attest = _attest.asStateFlow()
+
+    /** Serials the backend currently considers this client to own. Cached here
+     *  and refreshed on attestation rather than re-fetched on every read. */
+    private val _ownedDevices = MutableStateFlow<List<String>>(emptyList())
+    val ownedDevices = _ownedDevices.asStateFlow()
 
     private val _status = MutableStateFlow<String?>(null)
     val status = _status.asStateFlow()
@@ -108,10 +118,20 @@ class CaptureController(
         }
     }
 
+    /** Pull the set of devices the backend still considers this client to own. */
+    fun refreshOwnership() {
+        scope.launch {
+            fetchOwnedDevices(context)
+                .onSuccess { _ownedDevices.value = it }
+                .onFailure { Log.e(TAG, "failed to fetch owned devices", it) }
+        }
+    }
+
     /**
      * Prove ownership of the connected device: read its serial, request a
      * challenge from the backend, have the device sign the canonical payload,
-     * and submit the signature to complete attestation.
+     * and submit the signature to complete attestation. Refreshes the cached
+     * owned-device list on success.
      */
     fun attestDevice() {
         if (_attest.value is AttestState.InProgress) return
@@ -125,6 +145,7 @@ class CaptureController(
                 completeAttestation(context, challenge.instanceId, signature).getOrThrow()
                 _attest.value = AttestState.Attested(serial)
                 _status.value = "Device \"$serial\" attested"
+                refreshOwnership()
             } catch (e: Exception) {
                 Log.e(TAG, "attestation failed", e)
                 _attest.value = AttestState.Error(e.message ?: "attestation failed")

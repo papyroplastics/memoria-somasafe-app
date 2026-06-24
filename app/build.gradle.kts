@@ -59,11 +59,11 @@ android {
     }
 
     defaultConfig {
-        buildConfigField(
-            "String",
-            "BACKEND_URL",
-            "\"${project.findProperty("backend.url") ?: "http://192.168.0.10:8000"}\"",
-        )
+        val backendUrl = project.findProperty("backend.url")
+            ?: throw GradleException(
+                "backend.url is not set. Define it in gradle.properties (e.g. backend.url=http://10.0.0.5:8000).",
+            )
+        buildConfigField("String", "BACKEND_URL", "\"$backendUrl\"")
     }
 }
 
