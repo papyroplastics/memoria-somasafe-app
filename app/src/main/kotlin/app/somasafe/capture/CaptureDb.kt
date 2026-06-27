@@ -12,6 +12,7 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.Transaction
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
@@ -82,8 +83,23 @@ interface CaptureDao {
     @Insert
     suspend fun insertSample(sample: Sample): Long
 
+    @Insert
+    suspend fun insertSamples(samples: List<Sample>)
+
     @Update
     suspend fun updateSample(sample: Sample)
+
+    @Query("DELETE FROM sample_groups WHERE id = :groupId")
+    suspend fun deleteGroup(groupId: Long)
+
+    /** Insert a group and its samples atomically. [samples] is given the new
+     *  group id so callers can stamp it onto each row. */
+    @Transaction
+    suspend fun insertGroupWithSamples(group: SampleGroup, samples: (Long) -> List<Sample>): Long {
+        val groupId = insertGroup(group)
+        insertSamples(samples(groupId))
+        return groupId
+    }
 
     @Query(
         """

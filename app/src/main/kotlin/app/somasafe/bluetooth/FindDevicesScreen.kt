@@ -40,6 +40,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
+private const val TAG = "FindDevicesScreen"
 private const val DEVICE_NAME = "SomaSafe Device"
 
 @SuppressLint("MissingPermission")
@@ -63,7 +64,7 @@ fun FindDevicesScreen(modifier: Modifier = Modifier, onDeviceSelected: (Bluetoot
       scanSettings = scanSettings,
       onScanFailed = {
         scanning = false
-        Log.w("FindBLEDevices", "Scan failed: $it")
+        Log.w(TAG, "Scan failed: $it")
       },
       onDeviceFound = { result ->
         if (!devices.contains(result.device)) {

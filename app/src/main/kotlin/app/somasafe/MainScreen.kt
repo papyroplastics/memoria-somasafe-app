@@ -8,6 +8,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Memory
+import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -33,13 +34,15 @@ import app.somasafe.bluetooth.BluetoothPermissionBox
 import app.somasafe.bluetooth.ConnectDeviceScreen
 import app.somasafe.bluetooth.FindDevicesScreen
 import app.somasafe.bluetooth.rememberBleConnection
-import app.somasafe.capture.DeviceController
+import app.somasafe.capture.CaptureScreen
+import app.somasafe.device.DeviceSession
 import app.somasafe.model.ModelDetailScreen
 import app.somasafe.model.ModelListScreen
 
 private sealed interface Screen {
     data object DeviceList : Screen
     data object DeviceDetail : Screen
+    data object Captures : Screen
     data object Backend : Screen
     data object ModelList : Screen
     data class ModelDetail(val key: String) : Screen
@@ -47,12 +50,14 @@ private sealed interface Screen {
 
 private enum class AppTab(val title: String, val icon: ImageVector) {
     BLUETOOTH("BLE Scanner", Icons.Rounded.Bluetooth),
+    CAPTURES("Captures", Icons.Rounded.Storage),
     BACKEND("Backend", Icons.Rounded.Hub),
     MODEL("Model", Icons.Rounded.Memory),
 }
 
 private fun Screen.tab(): AppTab = when (this) {
     Screen.DeviceList, Screen.DeviceDetail -> AppTab.BLUETOOTH
+    Screen.Captures -> AppTab.CAPTURES
     Screen.Backend -> AppTab.BACKEND
     Screen.ModelList, is Screen.ModelDetail -> AppTab.MODEL
 }
@@ -78,7 +83,7 @@ fun MainScreen() {
     var device by remember { mutableStateOf<BluetoothDevice?>(null) }
     val connection = rememberBleConnection(device)
     val controller = remember(connection) {
-        connection?.let { DeviceController(context.applicationContext, it, scope) }
+        connection?.let { DeviceSession(context.applicationContext, it, scope) }
     }
 
     fun goBack() {
@@ -116,6 +121,7 @@ fun MainScreen() {
                                 // when a connection is still open.
                                 AppTab.BLUETOOTH ->
                                     if (device != null) Screen.DeviceDetail else Screen.DeviceList
+                                AppTab.CAPTURES -> Screen.Captures
                                 AppTab.BACKEND -> Screen.Backend
                                 AppTab.MODEL -> Screen.ModelList
                             }
@@ -146,6 +152,7 @@ fun MainScreen() {
                     LaunchedEffect(Unit) { screen = Screen.DeviceList }
                 }
             }
+            Screen.Captures -> CaptureScreen(modifier)
             Screen.Backend -> BackendDownloadScreen(modifier)
             Screen.ModelList -> ModelListScreen(modifier) { screen = Screen.ModelDetail(it) }
             is Screen.ModelDetail -> ModelDetailScreen(current.key, modifier) { screen = Screen.ModelList }

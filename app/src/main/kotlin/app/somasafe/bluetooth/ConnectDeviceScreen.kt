@@ -32,26 +32,20 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.somasafe.backend.LocalModel
 import app.somasafe.backend.listLocalModels
-import app.somasafe.capture.AttestState
-import app.somasafe.capture.CaptureState
-import app.somasafe.capture.DeviceController
-import app.somasafe.capture.GroupSummary
-import app.somasafe.capture.ModelState
+import app.somasafe.device.AttestState
+import app.somasafe.device.CaptureState
+import app.somasafe.device.DeviceSession
+import app.somasafe.device.ModelState
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-
-private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
 @SuppressLint("MissingPermission")
 @Composable
 fun ConnectDeviceScreen(
     device: BluetoothDevice,
     connection: BleConnection,
-    controller: DeviceController,
+    controller: DeviceSession,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -64,7 +58,6 @@ fun ConnectDeviceScreen(
     val attestState by controller.attest.collectAsStateWithLifecycle()
     val ownedDevices by controller.ownedDevices.collectAsStateWithLifecycle()
     val status by controller.status.collectAsStateWithLifecycle()
-    val groups by controller.groupSummaries.collectAsStateWithLifecycle(initialValue = emptyList())
 
     val connected = connectionState == BluetoothProfile.STATE_CONNECTED && services.isNotEmpty()
 
@@ -114,8 +107,6 @@ fun ConnectDeviceScreen(
         status?.let {
             Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-
-        GroupsCard(groups)
 
         if (services.isNotEmpty()) {
             Text("GATT services", style = MaterialTheme.typography.titleMedium)
@@ -250,27 +241,6 @@ private fun CaptureCard(
                     onClick = onStart,
                     enabled = connected && modelLoaded,
                 ) { Text("Start capture") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun GroupsCard(groups: List<GroupSummary>) {
-    if (groups.isEmpty()) return
-    Card {
-        Column(
-            modifier = Modifier.padding(16.dp).fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text("Capture history", style = MaterialTheme.typography.titleMedium)
-            groups.forEach { group ->
-                val started = timeFormat.format(Date(group.startedAt))
-                val ended = group.endedAt?.let { timeFormat.format(Date(it)) } ?: "active"
-                Text(
-                    "#${group.groupId}  $started → $ended   ${group.sampleCount} samples, ${group.resultCount} results",
-                    style = MaterialTheme.typography.bodySmall,
-                )
             }
         }
     }
