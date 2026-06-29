@@ -7,7 +7,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.Hub
-import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -29,20 +28,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import app.somasafe.backend.BackendDownloadScreen
-import app.somasafe.bluetooth.BluetoothPermissionBox
-import app.somasafe.bluetooth.ConnectDeviceScreen
-import app.somasafe.bluetooth.FindDevicesScreen
-import app.somasafe.bluetooth.rememberBleConnection
-import app.somasafe.capture.CaptureScreen
-import app.somasafe.device.DeviceSession
-import app.somasafe.model.ModelDetailScreen
-import app.somasafe.model.ModelListScreen
+import app.somasafe.backend.data.AuthStore
+import app.somasafe.backend.ui.BackendDownloadScreen
+import app.somasafe.backend.ui.BackendLoginScreen
+import app.somasafe.bluetooth.ui.BluetoothPermissionBox
+import app.somasafe.bluetooth.ui.ConnectDeviceScreen
+import app.somasafe.bluetooth.ui.FindDevicesScreen
+import app.somasafe.bluetooth.ui.rememberBleConnection
+import app.somasafe.capture.ui.CaptureScreen
+import app.somasafe.bluetooth.domain.DeviceSession
+import app.somasafe.backend.ui.ModelDetailScreen
+import app.somasafe.backend.ui.ModelListScreen
 
 private sealed interface Screen {
     data object DeviceList : Screen
     data object DeviceDetail : Screen
     data object Captures : Screen
+    data object BackendLogin : Screen
     data object Backend : Screen
     data object ModelList : Screen
     data class ModelDetail(val key: String) : Screen
@@ -52,18 +54,17 @@ private enum class AppTab(val title: String, val icon: ImageVector) {
     BLUETOOTH("BLE Scanner", Icons.Rounded.Bluetooth),
     CAPTURES("Captures", Icons.Rounded.Storage),
     BACKEND("Backend", Icons.Rounded.Hub),
-    MODEL("Model", Icons.Rounded.Memory),
 }
 
 private fun Screen.tab(): AppTab = when (this) {
     Screen.DeviceList, Screen.DeviceDetail -> AppTab.BLUETOOTH
     Screen.Captures -> AppTab.CAPTURES
-    Screen.Backend -> AppTab.BACKEND
-    Screen.ModelList, is Screen.ModelDetail -> AppTab.MODEL
+    Screen.BackendLogin, Screen.Backend, Screen.ModelList, is Screen.ModelDetail -> AppTab.BACKEND
 }
 
 private fun Screen.parent(): Screen? = when (this) {
     Screen.DeviceDetail -> Screen.DeviceList
+    Screen.ModelList -> Screen.Backend
     is Screen.ModelDetail -> Screen.ModelList
     else -> null
 }
@@ -122,8 +123,8 @@ fun MainScreen() {
                                 AppTab.BLUETOOTH ->
                                     if (device != null) Screen.DeviceDetail else Screen.DeviceList
                                 AppTab.CAPTURES -> Screen.Captures
-                                AppTab.BACKEND -> Screen.Backend
-                                AppTab.MODEL -> Screen.ModelList
+                                AppTab.BACKEND ->
+                                    if (AuthStore.isLoggedIn(context)) Screen.Backend else Screen.BackendLogin
                             }
                         },
                         icon = { Icon(entry.icon, contentDescription = entry.title) },
@@ -153,7 +154,12 @@ fun MainScreen() {
                 }
             }
             Screen.Captures -> CaptureScreen(modifier)
-            Screen.Backend -> BackendDownloadScreen(modifier)
+            Screen.BackendLogin -> BackendLoginScreen(modifier) { screen = Screen.Backend }
+            Screen.Backend -> BackendDownloadScreen(
+                modifier,
+                onLogout = { screen = Screen.BackendLogin },
+                onOpenLocalModels = { screen = Screen.ModelList },
+            )
             Screen.ModelList -> ModelListScreen(modifier) { screen = Screen.ModelDetail(it) }
             is Screen.ModelDetail -> ModelDetailScreen(current.key, modifier) { screen = Screen.ModelList }
         }
