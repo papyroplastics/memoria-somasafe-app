@@ -1,8 +1,11 @@
+import com.google.protobuf.gradle.proto
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.protobuf)
 }
 
 android {
@@ -54,6 +57,26 @@ android {
         buildConfig = true
     }
 
+    // jdsp's transitive jars (pdfbox/fontbox/ssj and stray junit) ship duplicate
+    // license/notice metadata that collides on resource merge; none is needed in the APK.
+    packaging {
+        resources {
+            excludes += setOf(
+                "/META-INF/DEPENDENCIES",
+                "/META-INF/LICENSE*",
+                "/META-INF/NOTICE*",
+                "/META-INF/*.md",
+            )
+        }
+    }
+
+    // The capture-import schema is the shared protobuf (symlinked at ../shared).
+    sourceSets {
+        getByName("main") {
+            proto { srcDir("${rootProject.projectDir}/shared") }
+        }
+    }
+
     ksp {
         arg("room.schemaLocation", "$projectDir/schemas")
     }
@@ -64,6 +87,18 @@ android {
                 "backend.url is not set. Define it in gradle.properties (e.g. backend.url=http://10.0.0.5:8000).",
             )
         buildConfigField("String", "BACKEND_URL", "\"$backendUrl\"")
+    }
+}
+
+protobuf {
+    protoc { artifact = "com.google.protobuf:protoc:${libs.versions.protobuf.get()}" }
+    generateProtoTasks {
+        all().forEach { task ->
+            task.builtins {
+                // Android wants the lite runtime; java-lite keeps the generated code small.
+                create("java") { option("lite") }
+            }
+        }
     }
 }
 
@@ -86,7 +121,13 @@ dependencies {
 
     implementation(libs.security.crypto)
 
-    implementation(libs.jdsp)
+    implementation(libs.jdsp) {
+        // jdsp -> wavfile pulls the maven-surefire test harness onto the runtime
+        // classpath (duplicate classes that break the APK build); it is test-only.
+        exclude(group = "org.junit.platform", module = "junit-platform-surefire-provider")
+    }
+
+    implementation(libs.protobuf.javalite)
 
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation(libs.junit.jupiter.engine)

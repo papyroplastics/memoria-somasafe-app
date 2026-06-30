@@ -2,3 +2,5 @@ build/
 .cxx/
 .gradle/
 .kotlin/
+
+shared/

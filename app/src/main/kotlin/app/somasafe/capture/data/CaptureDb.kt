@@ -18,6 +18,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
+
 /**
  * A capture group: the set of samples collected between one Start and Stop
  * press. Samples may be lost mid-group; what matters is that they were received

@@ -80,20 +80,23 @@ class CaptureRepository(context: Context) {
     }
 
     /** Persist an imported dataset as one group of samples shaped exactly like ESP
-     *  captures: the window's own sequence number and device timestamps, and a
-     *  receive time stamped now (last window) back-dated 8 s per earlier window. */
+     *  captures: each window's own sequence number, device timestamps and whichever
+     *  data/result halves survived export. Receive time is stamped now for the last
+     *  window and back-dated 8 s per sequence step, so gaps from dropped windows widen
+     *  the receive timeline just as real loss would. */
     suspend fun importDataset(dataset: ImportedDataset): Long {
         val now = System.currentTimeMillis()
-        val count = dataset.windows.size
-        val firstReceivedAt = now - (count - 1).coerceAtLeast(0) * WINDOW_MS
+        val windows = dataset.windows
+        val maxSeq = windows.maxOfOrNull { it.sequenceN } ?: 0L
+        val minSeq = windows.minOfOrNull { it.sequenceN } ?: 0L
         return dao.insertGroupWithSamples(
-            SampleGroup(startedAt = firstReceivedAt, endedAt = now),
+            SampleGroup(startedAt = now - (maxSeq - minSeq) * WINDOW_MS, endedAt = now),
         ) { groupId ->
-            dataset.windows.mapIndexed { index, window ->
+            windows.map { window ->
                 Sample(
                     groupId = groupId,
                     sequenceN = window.sequenceN,
-                    receivedAt = now - (count - 1 - index) * WINDOW_MS,
+                    receivedAt = now - (maxSeq - window.sequenceN) * WINDOW_MS,
                     deviceStartMs = window.deviceStartMs,
                     deviceEndMs = window.deviceEndMs,
                     ppg = window.ppg,
