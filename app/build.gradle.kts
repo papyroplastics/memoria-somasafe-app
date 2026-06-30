@@ -86,6 +86,8 @@ dependencies {
 
     implementation(libs.security.crypto)
 
+    implementation(libs.jdsp)
+
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation(libs.junit.jupiter.engine)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")

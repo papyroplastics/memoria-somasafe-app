@@ -53,6 +53,15 @@ class CaptureRepository(context: Context) {
         }
     }
 
+    /** All samples in a group, ordered by device time (for the preprocessing pipeline). */
+    suspend fun samplesForGroup(groupId: Long): List<Sample> = dao.samplesForGroup(groupId)
+
+    /** Store features for a window that has no inference result (and thus no score). */
+    suspend fun storeFeatures(sampleId: Long, features: ByteArray) = dao.setFeatures(sampleId, features)
+
+    /** Store the computed (un-normalized) activity context for a window. */
+    suspend fun storeContext(sampleId: Long, context: ByteArray) = dao.setContext(sampleId, context)
+
     suspend fun mergeResult(groupId: Long, result: MlResult) = dbMutex.withLock {
         val existing = dao.findSample(groupId, result.sequenceN)
         if (existing == null) {
@@ -70,23 +79,34 @@ class CaptureRepository(context: Context) {
         }
     }
 
-    /** Persist an imported dataset as one group of fully populated samples. */
+    /** Persist an imported dataset as one group of samples shaped exactly like ESP
+     *  captures: the window's own sequence number and device timestamps, and a
+     *  receive time stamped now (last window) back-dated 8 s per earlier window. */
     suspend fun importDataset(dataset: ImportedDataset): Long {
         val now = System.currentTimeMillis()
+        val count = dataset.windows.size
+        val firstReceivedAt = now - (count - 1).coerceAtLeast(0) * WINDOW_MS
         return dao.insertGroupWithSamples(
-            SampleGroup(startedAt = now, endedAt = now),
+            SampleGroup(startedAt = firstReceivedAt, endedAt = now),
         ) { groupId ->
             dataset.windows.mapIndexed { index, window ->
                 Sample(
                     groupId = groupId,
-                    sequenceN = index.toLong(),
-                    receivedAt = now,
+                    sequenceN = window.sequenceN,
+                    receivedAt = now - (count - 1 - index) * WINDOW_MS,
+                    deviceStartMs = window.deviceStartMs,
+                    deviceEndMs = window.deviceEndMs,
                     ppg = window.ppg,
                     acc = window.acc,
                     features = window.features,
                     score = window.score,
+                    context = window.context,
                 )
             }
         }
+    }
+
+    private companion object {
+        const val WINDOW_MS = 8_000L
     }
 }

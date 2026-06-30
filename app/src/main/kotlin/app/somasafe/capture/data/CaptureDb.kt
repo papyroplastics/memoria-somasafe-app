@@ -14,6 +14,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.Transaction
 import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -56,8 +58,9 @@ data class Sample(
     val deviceEndMs: Long? = null,   // on-device acquisition end (uptime ms)
     val ppg: ByteArray? = null,      // raw little-endian float32 PPG samples
     val acc: ByteArray? = null,      // raw little-endian float32 ACC samples
-    val features: ByteArray? = null, // raw little-endian float32 input features (from ML result)
+    val features: ByteArray? = null, // raw little-endian float32 input features (echoed or computed on-device)
     val score: ByteArray? = null,    // int8 model output (from ML result)
+    val context: ByteArray? = null,  // raw little-endian float32 activity context (2-d, un-normalized)
 )
 
 /** Per-group rollup for the capture history UI. */
@@ -67,6 +70,8 @@ data class GroupSummary(
     @ColumnInfo(name = "endedAt") val endedAt: Long?,
     @ColumnInfo(name = "sampleCount") val sampleCount: Int,
     @ColumnInfo(name = "resultCount") val resultCount: Int,
+    @ColumnInfo(name = "featureCount") val featureCount: Int,
+    @ColumnInfo(name = "contextCount") val contextCount: Int,
 )
 
 @Dao
@@ -80,6 +85,9 @@ interface CaptureDao {
     @Query("SELECT * FROM samples WHERE groupId = :groupId AND sequenceN = :sequenceN LIMIT 1")
     suspend fun findSample(groupId: Long, sequenceN: Long): Sample?
 
+    @Query("SELECT * FROM samples WHERE groupId = :groupId ORDER BY deviceStartMs, sequenceN")
+    suspend fun samplesForGroup(groupId: Long): List<Sample>
+
     @Insert
     suspend fun insertSample(sample: Sample): Long
 
@@ -88,6 +96,13 @@ interface CaptureDao {
 
     @Update
     suspend fun updateSample(sample: Sample)
+
+    /** Store computed features for a sample without touching its (possibly absent) score. */
+    @Query("UPDATE samples SET features = :features WHERE id = :id")
+    suspend fun setFeatures(id: Long, features: ByteArray)
+
+    @Query("UPDATE samples SET context = :context WHERE id = :id")
+    suspend fun setContext(id: Long, context: ByteArray)
 
     @Query("DELETE FROM sample_groups WHERE id = :groupId")
     suspend fun deleteGroup(groupId: Long)
@@ -105,7 +120,9 @@ interface CaptureDao {
         """
         SELECT g.id AS groupId, g.startedAt AS startedAt, g.endedAt AS endedAt,
                COUNT(s.id) AS sampleCount,
-               SUM(CASE WHEN s.score IS NOT NULL THEN 1 ELSE 0 END) AS resultCount
+               SUM(CASE WHEN s.score IS NOT NULL THEN 1 ELSE 0 END) AS resultCount,
+               SUM(CASE WHEN s.features IS NOT NULL THEN 1 ELSE 0 END) AS featureCount,
+               SUM(CASE WHEN s.context IS NOT NULL THEN 1 ELSE 0 END) AS contextCount
         FROM sample_groups g
         LEFT JOIN samples s ON s.groupId = g.id
         GROUP BY g.id
@@ -115,7 +132,7 @@ interface CaptureDao {
     fun groupSummaries(): Flow<List<GroupSummary>>
 }
 
-@Database(entities = [SampleGroup::class, Sample::class], version = 1, exportSchema = true)
+@Database(entities = [SampleGroup::class, Sample::class], version = 2, exportSchema = true)
 abstract class CaptureDatabase : RoomDatabase() {
     abstract fun captureDao(): CaptureDao
 
@@ -123,12 +140,19 @@ abstract class CaptureDatabase : RoomDatabase() {
         @Volatile
         private var instance: CaptureDatabase? = null
 
+        // v2 adds the per-window activity context (computed by the capture pipeline).
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE samples ADD COLUMN context BLOB")
+            }
+        }
+
         fun get(context: Context): CaptureDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext,
                 CaptureDatabase::class.java,
                 "capture.db",
-            ).build().also { instance = it }
+            ).addMigrations(MIGRATION_1_2).build().also { instance = it }
         }
     }
 }

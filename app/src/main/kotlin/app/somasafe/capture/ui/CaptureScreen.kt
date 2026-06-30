@@ -34,6 +34,7 @@ import java.util.Locale
 import app.somasafe.capture.data.CaptureRepository
 import app.somasafe.capture.data.DatasetImport
 import app.somasafe.capture.data.GroupSummary
+import app.somasafe.capture.domain.CapturePipeline
 
 private val timeFormat = SimpleDateFormat("MMM d HH:mm:ss", Locale.getDefault())
 
@@ -47,6 +48,7 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val repository = remember { CaptureRepository(context.applicationContext) }
+    val pipeline = remember { CapturePipeline(repository) }
 
     val groups by repository.groupSummaries().collectAsStateWithLifecycle(initialValue = emptyList())
     var status by remember { mutableStateOf<String?>(null) }
@@ -96,14 +98,29 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
             )
         } else {
             groups.forEach { group ->
-                GroupCard(group, onDelete = { scope.launch { repository.deleteGroup(group.groupId) } })
+                GroupCard(
+                    group,
+                    onProcess = {
+                        status = "Processing group #${group.groupId}…"
+                        scope.launch {
+                            try {
+                                val result = pipeline.process(group.groupId)
+                                status = "Group #${group.groupId}: +${result.featuresComputed} features, " +
+                                    "${result.contextsComputed} contexts"
+                            } catch (e: Exception) {
+                                status = "Processing failed: ${e.message}"
+                            }
+                        }
+                    },
+                    onDelete = { scope.launch { repository.deleteGroup(group.groupId) } },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun GroupCard(group: GroupSummary, onDelete: () -> Unit) {
+private fun GroupCard(group: GroupSummary, onProcess: () -> Unit, onDelete: () -> Unit) {
     var confirming by remember { mutableStateOf(false) }
     Card {
         Row(
@@ -121,7 +138,8 @@ private fun GroupCard(group: GroupSummary, onDelete: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    "${group.sampleCount} samples, ${group.resultCount} results",
+                    "${group.sampleCount} samples · ${group.resultCount} results · " +
+                        "${group.featureCount} features · ${group.contextCount} contexts",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -133,8 +151,11 @@ private fun GroupCard(group: GroupSummary, onDelete: () -> Unit) {
                     }
                 }
             } else {
-                TextButton(onClick = { confirming = true }) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = onProcess) { Text("Process") }
+                    TextButton(onClick = { confirming = true }) {
+                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                    }
                 }
             }
         }
