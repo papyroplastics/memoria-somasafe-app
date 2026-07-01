@@ -1,6 +1,5 @@
 package app.somasafe
 
-import android.bluetooth.BluetoothDevice
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -21,86 +20,85 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavDestination.Companion.hasRoute
+import androidx.navigation.NavDestination.Companion.hierarchy
+import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.navigation
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.toRoute
 import app.somasafe.backend.data.AuthStore
 import app.somasafe.backend.ui.BackendDownloadScreen
 import app.somasafe.backend.ui.BackendLoginScreen
+import app.somasafe.backend.ui.BackendModelsViewModel
+import app.somasafe.backend.ui.ModelDetailScreen
+import app.somasafe.backend.ui.ModelListScreen
 import app.somasafe.bluetooth.ui.BluetoothPermissionBox
 import app.somasafe.bluetooth.ui.ConnectDeviceScreen
 import app.somasafe.bluetooth.ui.FindDevicesScreen
-import app.somasafe.bluetooth.ui.rememberBleConnection
+import app.somasafe.bluetooth.ui.LocalBluetoothSession
+import app.somasafe.bluetooth.ui.ProvideBluetoothSession
 import app.somasafe.capture.ui.CaptureScreen
-import app.somasafe.bluetooth.domain.DeviceSession
-import app.somasafe.backend.ui.ModelDetailScreen
-import app.somasafe.backend.ui.ModelListScreen
+import kotlinx.serialization.Serializable
+import kotlin.reflect.KClass
 
-private sealed interface Screen {
-    data object DeviceList : Screen
-    data object DeviceDetail : Screen
-    data object Captures : Screen
-    data object BackendLogin : Screen
-    data object Backend : Screen
-    data object ModelList : Screen
-    data class ModelDetail(val key: String) : Screen
+// One nested graph per bottom-nav tab, each with its own back stack.
+@Serializable private object BluetoothTab
+@Serializable private object CapturesTab
+@Serializable private object BackendTab
+
+@Serializable private object DeviceList
+@Serializable private object DeviceDetail
+@Serializable private object Captures
+@Serializable private object BackendLogin
+@Serializable private object BackendHome
+@Serializable private object ModelList
+@Serializable private data class ModelDetail(val key: String)
+
+private enum class AppTab(val title: String, val icon: ImageVector, val graph: Any) {
+    BLUETOOTH("BLE Scanner", Icons.Rounded.Bluetooth, BluetoothTab),
+    CAPTURES("Captures", Icons.Rounded.Storage, CapturesTab),
+    BACKEND("Backend", Icons.Rounded.Hub, BackendTab),
 }
 
-private enum class AppTab(val title: String, val icon: ImageVector) {
-    BLUETOOTH("BLE Scanner", Icons.Rounded.Bluetooth),
-    CAPTURES("Captures", Icons.Rounded.Storage),
-    BACKEND("Backend", Icons.Rounded.Hub),
-}
-
-private fun Screen.tab(): AppTab = when (this) {
-    Screen.DeviceList, Screen.DeviceDetail -> AppTab.BLUETOOTH
-    Screen.Captures -> AppTab.CAPTURES
-    Screen.BackendLogin, Screen.Backend, Screen.ModelList, is Screen.ModelDetail -> AppTab.BACKEND
-}
-
-private fun Screen.parent(): Screen? = when (this) {
-    Screen.DeviceDetail -> Screen.DeviceList
-    Screen.ModelList -> Screen.Backend
-    is Screen.ModelDetail -> Screen.ModelList
-    else -> null
-}
+// Destinations that sit above a tab's root, so they show a back arrow.
+private val CHILD_ROUTES: List<KClass<*>> =
+    listOf(DeviceDetail::class, ModelList::class, ModelDetail::class)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen() {
+fun MainScreen() = ProvideBluetoothSession {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val session = LocalBluetoothSession.current
+    val navController = rememberNavController()
 
-    var screen by remember { mutableStateOf<Screen>(Screen.DeviceList) }
-    val tab = screen.tab()
-    val parent = screen.parent()
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val currentDest = backStackEntry?.destination
+    val selectedTab = AppTab.entries.firstOrNull { tab ->
+        currentDest?.hierarchy?.any { it.hasRoute(tab.graph::class) } == true
+    } ?: AppTab.BLUETOOTH
+    val showBack = currentDest != null && CHILD_ROUTES.any { currentDest.hasRoute(it) }
 
-    // Hoisted here so the connection (and its capture session) survives tab
-    // switches; it lives until the device changes or we leave the detail screen.
-    var device by remember { mutableStateOf<BluetoothDevice?>(null) }
-    val connection = rememberBleConnection(device)
-    val controller = remember(connection) {
-        connection?.let { DeviceSession(context.applicationContext, it, scope) }
+    val onBack: () -> Unit = {
+        if (navController.currentBackStackEntry?.destination?.hasRoute(DeviceDetail::class) == true) {
+            session.disconnect()
+        }
+        navController.navigateUp()
     }
-
-    fun goBack() {
-        if (screen == Screen.DeviceDetail) device = null
-        parent?.let { screen = it }
-    }
-
-    BackHandler(enabled = parent != null) { goBack() }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(tab.title) },
+                title = { Text(selectedTab.title) },
                 navigationIcon = {
-                    if (parent != null) {
-                        IconButton(onClick = { goBack() }) {
+                    if (showBack) {
+                        IconButton(onClick = onBack) {
                             Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
                         }
                     }
@@ -113,55 +111,94 @@ fun MainScreen() {
         },
         bottomBar = {
             NavigationBar {
-                AppTab.entries.forEach { entry ->
+                AppTab.entries.forEach { tab ->
                     NavigationBarItem(
-                        selected = tab == entry,
+                        selected = tab == selectedTab,
                         onClick = {
-                            screen = when (entry) {
-                                // Return to the live device rather than the scanner
-                                // when a connection is still open.
-                                AppTab.BLUETOOTH ->
-                                    if (device != null) Screen.DeviceDetail else Screen.DeviceList
-                                AppTab.CAPTURES -> Screen.Captures
-                                AppTab.BACKEND ->
-                                    if (AuthStore.isLoggedIn(context)) Screen.Backend else Screen.BackendLogin
+                            navController.navigate(tab.graph) {
+                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
                             }
                         },
-                        icon = { Icon(entry.icon, contentDescription = entry.title) },
-                        label = { Text(entry.title) },
+                        icon = { Icon(tab.icon, contentDescription = tab.title) },
+                        label = { Text(tab.title) },
                     )
                 }
             }
         },
     ) { innerPadding ->
-        val modifier = Modifier.padding(innerPadding)
-        when (val current = screen) {
-            Screen.DeviceList -> BluetoothPermissionBox {
-                FindDevicesScreen(modifier) {
-                    device = it
-                    screen = Screen.DeviceDetail
+        NavHost(
+            navController = navController,
+            startDestination = BluetoothTab,
+            modifier = Modifier.padding(innerPadding),
+        ) {
+            navigation<BluetoothTab>(startDestination = DeviceList) {
+                composable<DeviceList> {
+                    BluetoothPermissionBox {
+                        FindDevicesScreen {
+                            session.select(it)
+                            navController.navigate(DeviceDetail)
+                        }
+                    }
+                }
+                composable<DeviceDetail> {
+                    BackHandler { onBack() }
+                    BluetoothPermissionBox {
+                        val d = session.device
+                        val conn = session.connection
+                        val ctrl = session.controller
+                        if (d != null && conn != null && ctrl != null) {
+                            ConnectDeviceScreen(d, conn, ctrl)
+                        } else {
+                            // Device was cleared out from under us; fall back to the list.
+                            LaunchedEffect(Unit) { navController.navigateUp() }
+                        }
+                    }
                 }
             }
-            Screen.DeviceDetail -> BluetoothPermissionBox {
-                val d = device
-                val conn = connection
-                val ctrl = controller
-                if (d != null && conn != null && ctrl != null) {
-                    ConnectDeviceScreen(d, conn, ctrl, modifier)
-                } else {
-                    // Device was cleared out from under us; fall back to the list.
-                    LaunchedEffect(Unit) { screen = Screen.DeviceList }
+
+            navigation<CapturesTab>(startDestination = Captures) {
+                composable<Captures> { CaptureScreen() }
+            }
+
+            navigation<BackendTab>(startDestination = BackendLogin) {
+                composable<BackendLogin> {
+                    LaunchedEffect(Unit) {
+                        if (AuthStore.isLoggedIn(context)) {
+                            navController.navigate(BackendHome) {
+                                popUpTo(BackendLogin) { inclusive = true }
+                                launchSingleTop = true
+                            }
+                        }
+                    }
+                    BackendLoginScreen {
+                        navController.navigate(BackendHome) {
+                            popUpTo(BackendLogin) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    }
+                }
+                composable<BackendHome> {
+                    val vm: BackendModelsViewModel = viewModel()
+                    BackendDownloadScreen(
+                        vm = vm,
+                        onLogout = {
+                            navController.navigate(BackendLogin) {
+                                popUpTo(BackendHome) { inclusive = true }
+                                launchSingleTop = true
+                            }
+                        },
+                        onOpenLocalModels = { navController.navigate(ModelList) },
+                    )
+                }
+                composable<ModelList> {
+                    ModelListScreen { navController.navigate(ModelDetail(it)) }
+                }
+                composable<ModelDetail> { entry ->
+                    ModelDetailScreen(entry.toRoute<ModelDetail>().key) { navController.navigateUp() }
                 }
             }
-            Screen.Captures -> CaptureScreen(modifier)
-            Screen.BackendLogin -> BackendLoginScreen(modifier) { screen = Screen.Backend }
-            Screen.Backend -> BackendDownloadScreen(
-                modifier,
-                onLogout = { screen = Screen.BackendLogin },
-                onOpenLocalModels = { screen = Screen.ModelList },
-            )
-            Screen.ModelList -> ModelListScreen(modifier) { screen = Screen.ModelDetail(it) }
-            is Screen.ModelDetail -> ModelDetailScreen(current.key, modifier) { screen = Screen.ModelList }
         }
     }
 }

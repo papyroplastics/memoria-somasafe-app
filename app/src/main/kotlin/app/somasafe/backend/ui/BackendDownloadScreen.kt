@@ -7,23 +7,22 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -32,32 +31,14 @@ import app.somasafe.backend.data.AuthStore
 import app.somasafe.backend.data.BACKEND_URL
 import app.somasafe.backend.data.DownloadState
 import app.somasafe.backend.data.RemoteModel
-import app.somasafe.backend.data.TRAINABLE_FILENAME
 import app.somasafe.backend.data.WeightsStatus
-import app.somasafe.backend.data.downloadModel
-import app.somasafe.backend.data.downloadQuantized
-import app.somasafe.backend.data.downloadWeights
-import app.somasafe.backend.data.fetchModels
-import app.somasafe.backend.data.loadModelMeta
 import app.somasafe.backend.data.logout
-import app.somasafe.backend.data.modelDir
-import app.somasafe.backend.data.quantizedFile
-import app.somasafe.backend.data.saveModelMeta
-import app.somasafe.backend.data.weightsFile
-import app.somasafe.backend.data.weightsStatus
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
 
-private sealed interface ModelListState {
-    data object Loading : ModelListState
-    data class Loaded(val models: List<RemoteModel>) : ModelListState
-    data class Error(val message: String) : ModelListState
-}
-
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BackendDownloadScreen(
+    vm: BackendModelsViewModel,
     modifier: Modifier = Modifier,
     onLogout: () -> Unit = {},
     onOpenLocalModels: () -> Unit = {},
@@ -67,131 +48,74 @@ fun BackendDownloadScreen(
 
     val username = remember { AuthStore.username(context).orEmpty() }
 
-    var listState by remember { mutableStateOf<ModelListState>(ModelListState.Loading) }
-    val downloadStates = remember { mutableStateMapOf<String, DownloadState>() }
-    val weightsStates = remember { mutableStateMapOf<String, DownloadState>() }
-    val quantizeStates = remember { mutableStateMapOf<String, DownloadState>() }
-    val localMetas = remember { mutableStateMapOf<String, RemoteModel>() }
-    val weightsStatuses = remember { mutableStateMapOf<String, WeightsStatus>() }
-
-    LaunchedEffect(Unit) {
-        listState = fetchModels(context).fold(
-            onSuccess = { ModelListState.Loaded(it) },
-            onFailure = { ModelListState.Error(it.message ?: "Unknown error") },
-        )
-    }
-
-    LaunchedEffect(listState) {
-        val loaded = listState as? ModelListState.Loaded ?: return@LaunchedEffect
-        withContext(Dispatchers.IO) {
-            loaded.models.forEach { model ->
-                loadModelMeta(context, model.key)?.let { localMetas[model.key] = it }
-                weightsStatuses[model.key] = weightsStatus(context, model)
-            }
-        }
-    }
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+    PullToRefreshBox(
+        isRefreshing = vm.refreshing,
+        onRefresh = { vm.refresh() },
+        modifier = modifier.fillMaxSize(),
     ) {
-        Text("Download Models", style = MaterialTheme.typography.headlineSmall)
-        Text(
-            "Backend: $BACKEND_URL",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text("Download Models", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                "Backend: $BACKEND_URL",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
-        HorizontalDivider()
+            HorizontalDivider()
 
-        SessionHeader(
-            username = username,
-            onLogout = {
-                scope.launch {
-                    logout(context)
-                    onLogout()
-                }
-            },
-            onOpenLocalModels = onOpenLocalModels,
-        )
+            SessionHeader(
+                username = username,
+                onLogout = {
+                    scope.launch {
+                        logout(context)
+                        onLogout()
+                    }
+                },
+                onOpenLocalModels = onOpenLocalModels,
+            )
 
-        HorizontalDivider()
+            HorizontalDivider()
 
-        when (val state = listState) {
-            ModelListState.Loading ->
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    Text("Loading models…", style = MaterialTheme.typography.bodyMedium)
-                }
+            when (val state = vm.listState) {
+                ModelListState.Loading ->
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Text("Loading models…", style = MaterialTheme.typography.bodyMedium)
+                    }
 
-            is ModelListState.Error ->
-                Text(
-                    "Failed to load models: ${state.message}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-
-            is ModelListState.Loaded ->
-                state.models.forEach { model ->
-                    ModelDownloadCard(
-                        model = model,
-                        localMeta = localMetas[model.key],
-                        state = downloadStates[model.key] ?: DownloadState.Idle,
-                        weightsState = weightsStates[model.key] ?: DownloadState.Idle,
-                        quantizeState = quantizeStates[model.key] ?: DownloadState.Idle,
-                        showWeights = localMetas[model.key] != null,
-                        weightsStatus = weightsStatuses[model.key] ?: WeightsStatus.MISSING,
-                        quantizeEnabled = (weightsStatuses[model.key] ?: WeightsStatus.MISSING) != WeightsStatus.MISSING,
-                        onDownload = {
-                            scope.launch {
-                                downloadStates[model.key] = DownloadState.InProgress
-                                val dest = File(modelDir(context, model.key), TRAINABLE_FILENAME)
-                                val result = downloadModel(context, model.trainableEndpoint, dest)
-                                if (result.isSuccess) {
-                                    withContext(Dispatchers.IO) {
-                                        saveModelMeta(context, model)
-                                        weightsStatuses[model.key] = weightsStatus(context, model)
-                                    }
-                                    localMetas[model.key] = model
-                                    downloadStates[model.key] = DownloadState.Done(dest.absolutePath)
-                                } else {
-                                    downloadStates[model.key] = DownloadState.Error(
-                                        result.exceptionOrNull()?.message ?: "Unknown error"
-                                    )
-                                }
-                            }
-                        },
-                        onDownloadWeights = {
-                            scope.launch {
-                                weightsStates[model.key] = DownloadState.InProgress
-                                weightsStates[model.key] = downloadWeights(context, model).fold(
-                                    onSuccess = {
-                                        withContext(Dispatchers.IO) {
-                                            loadModelMeta(context, model.key)?.let { localMetas[model.key] = it }
-                                            weightsStatuses[model.key] = weightsStatus(context, model)
-                                        }
-                                        DownloadState.Done(weightsFile(context, model.key).absolutePath)
-                                    },
-                                    onFailure = { DownloadState.Error(it.message ?: "Unknown error") },
-                                )
-                            }
-                        },
-                        onQuantize = {
-                            scope.launch {
-                                quantizeStates[model.key] = DownloadState.InProgress
-                                quantizeStates[model.key] = downloadQuantized(context, model).fold(
-                                    onSuccess = { DownloadState.Done(quantizedFile(context, model.key).absolutePath) },
-                                    onFailure = { DownloadState.Error(it.message ?: "Unknown error") },
-                                )
-                            }
-                        },
+                is ModelListState.Error ->
+                    Text(
+                        "Failed to load models: ${state.message}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
                     )
-                }
+
+                is ModelListState.Loaded ->
+                    state.models.forEach { model ->
+                        ModelDownloadCard(
+                            model = model,
+                            localMeta = vm.localMetas[model.key],
+                            state = vm.downloadStates[model.key] ?: DownloadState.Idle,
+                            weightsState = vm.weightsStates[model.key] ?: DownloadState.Idle,
+                            quantizeState = vm.quantizeStates[model.key] ?: DownloadState.Idle,
+                            showWeights = vm.localMetas[model.key] != null,
+                            weightsStatus = vm.weightsStatuses[model.key] ?: WeightsStatus.MISSING,
+                            quantizeEnabled = (vm.weightsStatuses[model.key] ?: WeightsStatus.MISSING) != WeightsStatus.MISSING,
+                            onDownload = { vm.download(model) },
+                            onDownloadWeights = { vm.downloadWeightsFor(model) },
+                            onQuantize = { vm.quantize(model) },
+                        )
+                    }
+            }
         }
     }
 }
