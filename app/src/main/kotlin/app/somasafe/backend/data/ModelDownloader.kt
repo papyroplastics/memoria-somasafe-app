@@ -52,6 +52,7 @@ data class RemoteModel(
     val quantizedEndpoint: String get() = "$BACKEND_URL/model/download/quantized/$key"
     val quantizeEndpoint: String get() = "$BACKEND_URL/model/quantize/$key"
     val weightsEndpoint: String get() = "$BACKEND_URL/model/weights/$key"
+    val normEndpoint: String get() = "$BACKEND_URL/model/norm/$key"
     fun resultEndpoint(jobId: String): String = "$BACKEND_URL/model/quantize/result/$jobId"
 
     fun toJson(): JSONObject = JSONObject().apply {

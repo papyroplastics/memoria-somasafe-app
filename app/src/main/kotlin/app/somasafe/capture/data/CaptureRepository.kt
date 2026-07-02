@@ -13,17 +13,29 @@ import kotlinx.coroutines.sync.withLock
  * by sequence number into the same row; imported datasets land here as fully
  * populated rows indistinguishable from captured ones.
  */
-class CaptureRepository(context: Context) {
+class CaptureRepository(private val context: Context) {
     private val dao = CaptureDatabase.get(context).captureDao()
     private val dbMutex = Mutex()
 
     /** Per-group rollup for the history UI; updates live as rows are written. */
     fun groupSummaries(): Flow<List<GroupSummary>> = dao.groupSummaries()
 
-    suspend fun startGroup(startedAt: Long): Long =
-        dao.insertGroup(SampleGroup(startedAt = startedAt))
+    /** Open a capture group, stamping it with the default static (demographics) vector
+     *  in effect when the capture starts. */
+    suspend fun startGroup(startedAt: Long, static: ByteArray? = null): Long =
+        dao.insertGroup(SampleGroup(startedAt = startedAt, static = static))
 
     suspend fun endGroup(groupId: Long, endedAt: Long) = dao.endGroup(groupId, endedAt)
+
+    /** The group's static (demographics) conditioning vector. Groups recorded before
+     *  demographics were set carry no static of their own; those fall back to the current
+     *  default. Null only when the group has none and no default has been set either. */
+    suspend fun groupStatic(groupId: Long): ByteArray? =
+        dao.findGroup(groupId)?.static ?: loadDemographics(context)?.toBytes()
+
+    /** Backfill the given default static onto every group that never got one. Called when
+     *  the demographics form is saved so pre-existing captures become trainable. */
+    suspend fun fillMissingStatic(static: ByteArray) = dao.fillMissingStatic(static)
 
     suspend fun deleteGroup(groupId: Long) = dao.deleteGroup(groupId)
 
@@ -84,13 +96,17 @@ class CaptureRepository(context: Context) {
      *  data/result halves survived export. Receive time is stamped now for the last
      *  window and back-dated 8 s per sequence step, so gaps from dropped windows widen
      *  the receive timeline just as real loss would. */
-    suspend fun importDataset(dataset: ImportedDataset): Long {
+    suspend fun importDataset(dataset: ImportedDataset, fallbackStatic: ByteArray? = null): Long {
         val now = System.currentTimeMillis()
         val windows = dataset.windows
         val maxSeq = windows.maxOfOrNull { it.sequenceN } ?: 0L
         val minSeq = windows.minOfOrNull { it.sequenceN } ?: 0L
         return dao.insertGroupWithSamples(
-            SampleGroup(startedAt = now - (maxSeq - minSeq) * WINDOW_MS, endedAt = now),
+            SampleGroup(
+                startedAt = now - (maxSeq - minSeq) * WINDOW_MS,
+                endedAt = now,
+                static = dataset.static ?: fallbackStatic,
+            ),
         ) { groupId ->
             windows.map { window ->
                 Sample(

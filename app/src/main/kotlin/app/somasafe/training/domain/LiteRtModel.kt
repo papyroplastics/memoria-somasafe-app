@@ -1,4 +1,4 @@
-package app.somasafe.backend.domain
+package app.somasafe.training.domain
 
 import java.io.Closeable
 

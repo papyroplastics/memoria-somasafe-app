@@ -43,11 +43,11 @@ import app.somasafe.backend.data.weightsStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import app.somasafe.backend.domain.LiteRtModel
-import app.somasafe.backend.domain.ModelInfo
-import app.somasafe.backend.domain.QuantizationInfo
-import app.somasafe.backend.domain.SignatureInfo
-import app.somasafe.backend.domain.TensorInfo
+import app.somasafe.training.domain.LiteRtModel
+import app.somasafe.training.domain.ModelInfo
+import app.somasafe.training.domain.QuantizationInfo
+import app.somasafe.training.domain.SignatureInfo
+import app.somasafe.training.domain.TensorInfo
 
 private val KNOWN_ROLES: Map<String, String> = mapOf(
     "feature"         to "feature vector",
@@ -63,7 +63,8 @@ private val KNOWN_ROLES: Map<String, String> = mapOf(
 private fun TensorInfo.role(): String? = KNOWN_ROLES[name]
 
 @Composable
-fun ModelDetailScreen(modelKey: String, modifier: Modifier = Modifier, onDeleted: () -> Unit = {}) {
+fun ModelDetailScreen(modelKey: String, modifier: Modifier = Modifier,
+                      onOpenTraining: () -> Unit = {}, onDeleted: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val modelFile = trainableFile(context, modelKey)
@@ -102,6 +103,10 @@ fun ModelDetailScreen(modelKey: String, modifier: Modifier = Modifier, onDeleted
         )
 
         ModelWeightsSection(modelKey = modelKey, meta = storedMeta)
+
+        Button(onClick = onOpenTraining, modifier = Modifier.fillMaxWidth()) {
+            Text("Train on capture…")
+        }
 
         storedMeta?.let { ModelMetaCard(it) }
 

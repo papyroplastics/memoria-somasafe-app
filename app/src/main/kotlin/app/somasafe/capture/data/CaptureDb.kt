@@ -27,8 +27,11 @@ import kotlinx.coroutines.flow.Flow
 @Entity(tableName = "sample_groups")
 data class SampleGroup(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val startedAt: Long,        // epoch millis when capture started
-    val endedAt: Long? = null,  // epoch millis when capture stopped
+    val startedAt: Long,          // epoch millis when capture started
+    val endedAt: Long? = null,    // epoch millis when capture stopped
+    val static: ByteArray? = null, // raw little-endian float32 demographics (6-d); the group's
+                                   // conditioning static, stamped from the default (ESP) or the
+                                   // imported dataset's own subject. Null if never set.
 )
 
 /**
@@ -83,6 +86,14 @@ interface CaptureDao {
     @Query("UPDATE sample_groups SET endedAt = :endedAt WHERE id = :groupId")
     suspend fun endGroup(groupId: Long, endedAt: Long)
 
+    @Query("SELECT * FROM sample_groups WHERE id = :groupId LIMIT 1")
+    suspend fun findGroup(groupId: Long): SampleGroup?
+
+    /** Stamp the given static onto every group that never got one (e.g. ESP captures
+     *  recorded before demographics were first set). */
+    @Query("UPDATE sample_groups SET static = :static WHERE static IS NULL")
+    suspend fun fillMissingStatic(static: ByteArray)
+
     @Query("SELECT * FROM samples WHERE groupId = :groupId AND sequenceN = :sequenceN LIMIT 1")
     suspend fun findSample(groupId: Long, sequenceN: Long): Sample?
 
@@ -133,7 +144,7 @@ interface CaptureDao {
     fun groupSummaries(): Flow<List<GroupSummary>>
 }
 
-@Database(entities = [SampleGroup::class, Sample::class], version = 2, exportSchema = true)
+@Database(entities = [SampleGroup::class, Sample::class], version = 3, exportSchema = true)
 abstract class CaptureDatabase : RoomDatabase() {
     abstract fun captureDao(): CaptureDao
 
@@ -148,12 +159,19 @@ abstract class CaptureDatabase : RoomDatabase() {
             }
         }
 
+        // v3 adds the per-group static (demographics) conditioning vector.
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sample_groups ADD COLUMN static BLOB")
+            }
+        }
+
         fun get(context: Context): CaptureDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext,
                 CaptureDatabase::class.java,
                 "capture.db",
-            ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
         }
     }
 }

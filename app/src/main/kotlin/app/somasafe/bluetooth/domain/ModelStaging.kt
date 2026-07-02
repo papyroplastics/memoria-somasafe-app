@@ -4,8 +4,8 @@ import android.content.Context
 import android.util.Log
 import app.somasafe.backend.data.quantizedFile
 import app.somasafe.bluetooth.data.BleConnection
-import app.somasafe.backend.domain.LiteRtModel
-import app.somasafe.backend.domain.TensorInfo
+import app.somasafe.training.domain.LiteRtModel
+import app.somasafe.training.domain.TensorInfo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow

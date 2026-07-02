@@ -1,4 +1,4 @@
-package app.somasafe.backend.domain
+package app.somasafe.training.domain
 
 data class QuantizationInfo(
     val type: String,           // "none" | "per_tensor" | "per_channel" | "block_wise" | "unknown"

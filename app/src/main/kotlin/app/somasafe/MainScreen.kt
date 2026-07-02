@@ -45,6 +45,8 @@ import app.somasafe.bluetooth.ui.FindDevicesScreen
 import app.somasafe.bluetooth.ui.LocalBluetoothSession
 import app.somasafe.bluetooth.ui.ProvideBluetoothSession
 import app.somasafe.capture.ui.CaptureScreen
+import app.somasafe.capture.ui.DemographicsScreen
+import app.somasafe.training.ui.TrainingScreen
 import kotlinx.serialization.Serializable
 import kotlin.reflect.KClass
 
@@ -56,10 +58,12 @@ import kotlin.reflect.KClass
 @Serializable private object DeviceList
 @Serializable private object DeviceDetail
 @Serializable private object Captures
+@Serializable private object Demographics
 @Serializable private object BackendLogin
 @Serializable private object BackendHome
 @Serializable private object ModelList
 @Serializable private data class ModelDetail(val key: String)
+@Serializable private data class TrainingRoute(val key: String)
 
 private enum class AppTab(val title: String, val icon: ImageVector, val graph: Any) {
     BLUETOOTH("BLE Scanner", Icons.Rounded.Bluetooth, BluetoothTab),
@@ -69,7 +73,8 @@ private enum class AppTab(val title: String, val icon: ImageVector, val graph: A
 
 // Destinations that sit above a tab's root, so they show a back arrow.
 private val CHILD_ROUTES: List<KClass<*>> =
-    listOf(DeviceDetail::class, ModelList::class, ModelDetail::class)
+    listOf(DeviceDetail::class, Demographics::class, ModelList::class, ModelDetail::class,
+        TrainingRoute::class)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -159,7 +164,10 @@ fun MainScreen() = ProvideBluetoothSession {
             }
 
             navigation<CapturesTab>(startDestination = Captures) {
-                composable<Captures> { CaptureScreen() }
+                composable<Captures> {
+                    CaptureScreen(onOpenDemographics = { navController.navigate(Demographics) })
+                }
+                composable<Demographics> { DemographicsScreen() }
             }
 
             navigation<BackendTab>(startDestination = BackendLogin) {
@@ -196,7 +204,15 @@ fun MainScreen() = ProvideBluetoothSession {
                     ModelListScreen { navController.navigate(ModelDetail(it)) }
                 }
                 composable<ModelDetail> { entry ->
-                    ModelDetailScreen(entry.toRoute<ModelDetail>().key) { navController.navigateUp() }
+                    val key = entry.toRoute<ModelDetail>().key
+                    ModelDetailScreen(
+                        modelKey = key,
+                        onOpenTraining = { navController.navigate(TrainingRoute(key)) },
+                        onDeleted = { navController.navigateUp() },
+                    )
+                }
+                composable<TrainingRoute> { entry ->
+                    TrainingScreen(entry.toRoute<TrainingRoute>().key)
                 }
             }
         }

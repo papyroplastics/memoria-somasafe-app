@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import app.somasafe.bluetooth.data.BleConnection
 import app.somasafe.capture.data.CaptureRepository
+import app.somasafe.capture.data.loadDemographics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -27,7 +28,7 @@ sealed interface CaptureState {
  * Scoped to a screen via [scope]; not retained across configuration changes.
  */
 class DeviceSession(
-    context: Context,
+    private val context: Context,
     private val connection: BleConnection,
     private val scope: CoroutineScope,
 ) {
@@ -71,7 +72,8 @@ class DeviceSession(
                 return@launch
             }
 
-            val groupId = repository.startGroup(System.currentTimeMillis())
+            val static = loadDemographics(context)?.toBytes()
+            val groupId = repository.startGroup(System.currentTimeMillis(), static)
             _capture.value = CaptureState.Running(groupId)
             _status.value = "Capturing…"
 

@@ -34,6 +34,7 @@ import java.util.Locale
 import app.somasafe.capture.data.CaptureRepository
 import app.somasafe.capture.data.DatasetImport
 import app.somasafe.capture.data.GroupSummary
+import app.somasafe.capture.data.loadDemographics
 import app.somasafe.capture.domain.CapturePipeline
 
 private val timeFormat = SimpleDateFormat("MMM d HH:mm:ss", Locale.getDefault())
@@ -44,7 +45,7 @@ private val timeFormat = SimpleDateFormat("MMM d HH:mm:ss", Locale.getDefault())
  * backend/scripts/export_subject_data.py. Independent of any BLE connection.
  */
 @Composable
-fun CaptureScreen(modifier: Modifier = Modifier) {
+fun CaptureScreen(modifier: Modifier = Modifier, onOpenDemographics: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val repository = remember { CaptureRepository(context.applicationContext) }
@@ -65,7 +66,7 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
                         ?: error("could not open file")
                     DatasetImport.parse(bytes)
                 }
-                repository.importDataset(dataset)
+                repository.importDataset(dataset, loadDemographics(context)?.toBytes())
                 status = "Imported S${dataset.subject}: ${dataset.windows.size} windows"
             } catch (e: Exception) {
                 status = "Import failed: ${e.message}"
@@ -82,8 +83,13 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
     ) {
         Text("Captures", style = MaterialTheme.typography.headlineSmall)
 
-        Button(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
-            Text("Import dataset…")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
+                Text("Import dataset…")
+            }
+            TextButton(onClick = onOpenDemographics) {
+                Text("Demographics")
+            }
         }
 
         status?.let {

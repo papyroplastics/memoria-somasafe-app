@@ -22,6 +22,7 @@ data class ImportedWindow(
 data class ImportedDataset(
     val subject: Int,
     val windows: List<ImportedWindow>,
+    val static: ByteArray?,   // raw little-endian float32 demographics (6-d); null if absent
 )
 
 /**
@@ -35,7 +36,7 @@ data class ImportedDataset(
  * numbers, exactly like dropped captures.
  */
 object DatasetImport {
-    private const val FORMAT_VERSION = 3
+    private const val FORMAT_VERSION = 4
 
     fun parse(bytes: ByteArray): ImportedDataset {
         val dataset = try {
@@ -59,7 +60,7 @@ object DatasetImport {
                 context = w.context.bytesOrNull(),
             )
         }
-        return ImportedDataset(dataset.subject, windows)
+        return ImportedDataset(dataset.subject, windows, dataset.static.bytesOrNull())
     }
 
     private fun ByteString.bytesOrNull(): ByteArray? = if (isEmpty) null else toByteArray()
