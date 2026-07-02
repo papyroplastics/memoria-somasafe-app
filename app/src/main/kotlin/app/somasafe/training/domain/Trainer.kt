@@ -22,6 +22,11 @@ private const val N_CONTEXT = 2
 private const val TRAIN_SIGNATURE = "train"
 private const val SIGNAL_INPUT = "signal"
 
+/** A signature's input/output tensors are exposed prefixed with the signature name and
+ *  suffixed with a `:0` output index (unique since the models have no name collisions),
+ *  e.g. the `train` signature's `signal` input is the tensor `train_signal:0`. */
+private fun sigParam(signature: String, param: String) = "${signature}_$param:0"
+
 /**
  * Runs one local training epoch of a model over a processed capture group and writes
  * the trained weights back to `weights.json` (keeping the same base `weights_id`, so
@@ -67,13 +72,14 @@ class Trainer(private val context: Context, private val repository: CaptureRepos
 
     private fun runEpoch(model: LiteRtModel, windows: List<Window>): TrainResult {
         val (batchSize, order) = trainLayout(model.describe())
+        val signalName = sigParam(TRAIN_SIGNATURE, SIGNAL_INPUT)
         val batches = windows.size / batchSize            // full batches only; drop the remainder
         var lossSum = 0f
         for (b in 0 until batches) {
             val batch = windows.subList(b * batchSize, (b + 1) * batchSize)
             val signal = flatten(batch.map { it.signal })
             val cond = flatten(batch.map { it.cond })
-            val inputs = order.map { if (it == SIGNAL_INPUT) signal else cond }.toTypedArray()
+            val inputs = order.map { if (it == signalName) signal else cond }.toTypedArray()
             lossSum += model.train(inputs, 1)
         }
         val meanLoss = if (batches > 0) lossSum / batches else Float.NaN
@@ -81,12 +87,14 @@ class Trainer(private val context: Context, private val repository: CaptureRepos
     }
 
     /** Batch size and input ordering the train signature declares (the JNI feeds
-     *  `Array<FloatArray>` in the signature's input-tensor order). */
+     *  `Array<FloatArray>` in the signature's input-tensor order). Tensor names are
+     *  prefixed with the signature name (`train_signal`, `train_cond`). */
     private fun trainLayout(info: ModelInfo): Pair<Int, List<String>> {
         val sig = info.signatures.firstOrNull { it.key == TRAIN_SIGNATURE }
             ?: error("model has no '$TRAIN_SIGNATURE' signature")
-        val signal = sig.inputs.firstOrNull { it.name == SIGNAL_INPUT }
-            ?: error("train signature has no '$SIGNAL_INPUT' input")
+        val signalName = sigParam(TRAIN_SIGNATURE, SIGNAL_INPUT)
+        val signal = sig.inputs.firstOrNull { it.name == signalName }
+            ?: error("train signature has no '$signalName' input")
         val batch = signal.shape.firstOrNull() ?: -1
         require(batch > 0) { "train signature has a non-fixed batch size" }
         return batch to sig.inputs.map { it.name }

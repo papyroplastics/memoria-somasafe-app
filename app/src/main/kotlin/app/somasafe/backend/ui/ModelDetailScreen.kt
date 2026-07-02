@@ -60,7 +60,10 @@ private val KNOWN_ROLES: Map<String, String> = mapOf(
     "parameter_count" to "parameter count",
 )
 
-private fun TensorInfo.role(): String? = KNOWN_ROLES[name]
+// Tensor names are prefixed with their signature and suffixed with `:0` (e.g.
+// `train_signal:0`); fall back to the bare param name so the base role still resolves.
+private fun TensorInfo.role(): String? =
+    KNOWN_ROLES[name] ?: KNOWN_ROLES[name.substringAfter('_', name).substringBefore(':')]
 
 @Composable
 fun ModelDetailScreen(modelKey: String, modifier: Modifier = Modifier,
