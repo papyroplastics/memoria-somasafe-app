@@ -45,14 +45,13 @@ class Trainer(private val context: Context, private val repository: CaptureRepos
         require(static.size == N_STATIC) { "expected $N_STATIC static values, got ${static.size}" }
 
         val samples = repository.samplesForGroup(groupId)
-        val staticNorm = normalize(static, norm.staticMean, norm.staticStd)   // 6-d, shared by every window
         val windows = samples.mapNotNull { s ->
             val ppg = s.ppg?.leFloats() ?: return@mapNotNull null
             val acc = s.acc?.leFloats() ?: return@mapNotNull null
             val ctx = s.context?.leFloats() ?: return@mapNotNull null
             if (ppg.size != BVP_LEN || ctx.size != N_CONTEXT) return@mapNotNull null
-            // cond = [static(6), context(2)], matching backend window_cond_vectors.
-            val cond = staticNorm + normalize(ctx, norm.contextMean, norm.contextStd)
+            // cond = [static(6), context(2)], normalized as one 8-d vector (backend window_cond_vectors).
+            val cond = normalize(static + ctx, norm.condMean, norm.condStd)
             Window(signalFrame(ppg, acc, norm), cond)
         }
 

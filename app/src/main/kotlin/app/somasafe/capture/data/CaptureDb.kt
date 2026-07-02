@@ -91,8 +91,8 @@ interface CaptureDao {
 
     /** Stamp the given static onto every group that never got one (e.g. ESP captures
      *  recorded before demographics were first set). */
-    @Query("UPDATE sample_groups SET static = :static WHERE static IS NULL")
-    suspend fun fillMissingStatic(static: ByteArray)
+    @Query("UPDATE sample_groups SET static = :staticVector WHERE static IS NULL")
+    suspend fun fillMissingStatic(staticVector: ByteArray)
 
     @Query("SELECT * FROM samples WHERE groupId = :groupId AND sequenceN = :sequenceN LIMIT 1")
     suspend fun findSample(groupId: Long, sequenceN: Long): Sample?
