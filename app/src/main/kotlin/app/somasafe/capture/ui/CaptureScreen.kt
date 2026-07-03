@@ -20,7 +20,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -129,10 +128,9 @@ fun CaptureScreen(modifier: Modifier = Modifier, onOpenDemographics: () -> Unit 
 private fun GroupCard(group: GroupSummary, onProcess: () -> Unit, onDelete: () -> Unit) {
     var confirming by remember { mutableStateOf(false) }
     Card {
-        Row(
+        Column(
             modifier = Modifier.padding(16.dp).fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 val started = timeFormat.format(Date(group.startedAt))
