@@ -3,6 +3,7 @@ package app.somasafe.bluetooth.domain
 import android.content.Context
 import android.util.Log
 import app.somasafe.backend.data.quantizedFile
+import app.somasafe.backend.data.trainableFile
 import app.somasafe.bluetooth.data.BleConnection
 import app.somasafe.training.domain.LiteRtModel
 import app.somasafe.training.domain.TensorInfo
@@ -41,10 +42,11 @@ class ModelStaging(
         scope.launch {
             _model.value = ModelState.Loading
             try {
-                val file = quantizedFile(context, key)
-                val bytes = withContext(Dispatchers.IO) { file.readBytes() }
+                // The staged file is an opaque signed payload (norm params + tflite),
+                // uploaded verbatim; introspect the trainable model for the tensor sizes.
+                val bytes = withContext(Dispatchers.IO) { quantizedFile(context, key).readBytes() }
                 val (featuresLen, scoreLen) =
-                    withContext(Dispatchers.Default) { introspect(file.absolutePath) }
+                    withContext(Dispatchers.Default) { introspect(trainableFile(context, key).absolutePath) }
 
                 val buffer = ClientBuffer(connection, SomaSafeUuids.ML_SVC)
                 buffer.start()
@@ -65,8 +67,10 @@ class ModelStaging(
     }
 
     private fun introspect(path: String): Pair<Int, Int> = LiteRtModel(path).use { model ->
-        val signature = model.describe().signatures.firstOrNull()
-            ?: error("model exposes no signatures")
+        // The device echoes the raw feature vector + int8 score; the trainable model's
+        // `eval` signature declares the same input/output shapes as the staged int8 model.
+        val signature = model.describe().signatures.firstOrNull { it.key == "eval" }
+            ?: error("model has no 'eval' signature")
         val input = signature.inputs.firstOrNull() ?: error("model has no input tensor")
         val output = signature.outputs.firstOrNull() ?: error("model has no output tensor")
         // Features stream back as float32; the score stays int8 (1 byte/element).

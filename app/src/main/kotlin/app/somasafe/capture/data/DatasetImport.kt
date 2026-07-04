@@ -36,7 +36,7 @@ data class ImportedDataset(
  * numbers, exactly like dropped captures.
  */
 object DatasetImport {
-    private const val FORMAT_VERSION = 4
+    private const val FORMAT_VERSION = 1
 
     fun parse(bytes: ByteArray): ImportedDataset {
         val dataset = try {

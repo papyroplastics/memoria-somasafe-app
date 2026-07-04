@@ -11,7 +11,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,16 +27,14 @@ import app.somasafe.backend.data.loadModelMeta
 import app.somasafe.backend.data.loadWeights
 import app.somasafe.capture.data.CaptureRepository
 import app.somasafe.capture.data.GroupSummary
-import app.somasafe.training.data.NormStatus
-import app.somasafe.training.data.downloadNormParams
-import app.somasafe.training.data.normStatus
 import app.somasafe.training.domain.Trainer
 
 /**
  * On-device training for one model: pick a processed capture group and run a local
  * epoch, writing the trained weights back to `weights.json`. Requires the model's
- * weights and normalization params to be present (both pulled under the Backend tab /
- * here). After training, the model detail screen's Quantize action uploads the result.
+ * weights to be present (pulled under the Backend tab). The model z-scores its own
+ * inputs, so no normalization params are needed here. After training, the model detail
+ * screen's Quantize action uploads the result.
  */
 @Composable
 fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {
@@ -50,11 +47,10 @@ fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {
     val meta = remember(modelKey) { loadModelMeta(context, modelKey) }
 
     var hasWeights by remember(modelKey) { mutableStateOf(loadWeights(context, modelKey) != null) }
-    var norm by remember(modelKey) { mutableStateOf(meta?.let { normStatus(context, it) } ?: NormStatus.MISSING) }
     var busy by remember(modelKey) { mutableStateOf(false) }
     var status by remember(modelKey) { mutableStateOf<String?>(null) }
 
-    val ready = hasWeights && norm == NormStatus.CURRENT
+    val ready = hasWeights
 
     Column(
         modifier = modifier
@@ -65,19 +61,7 @@ fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {
     ) {
         Text("Train ${meta?.name ?: modelKey}", style = MaterialTheme.typography.headlineSmall)
 
-        PrereqCard(hasWeights = hasWeights, norm = norm, busy = busy, canFetchNorm = meta != null,
-            onFetchNorm = {
-                val model = meta ?: return@PrereqCard
-                scope.launch {
-                    busy = true
-                    status = downloadNormParams(context, model).fold(
-                        onSuccess = { "Normalization params downloaded" },
-                        onFailure = { "Norm params failed: ${it.message}" },
-                    )
-                    norm = normStatus(context, model)
-                    busy = false
-                }
-            })
+        PrereqCard(hasWeights = hasWeights)
 
         status?.let {
             Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
@@ -113,8 +97,7 @@ fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun PrereqCard(hasWeights: Boolean, norm: NormStatus, busy: Boolean,
-                       canFetchNorm: Boolean, onFetchNorm: () -> Unit) {
+private fun PrereqCard(hasWeights: Boolean) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -125,28 +108,6 @@ private fun PrereqCard(hasWeights: Boolean, norm: NormStatus, busy: Boolean,
                 style = MaterialTheme.typography.bodySmall,
                 color = if (hasWeights) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
             )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val normText = when (norm) {
-                    NormStatus.MISSING -> "Norm params: missing"
-                    NormStatus.OUTDATED -> "Norm params: outdated"
-                    NormStatus.CURRENT -> "Norm params: up to date"
-                }
-                Text(
-                    normText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (norm == NormStatus.CURRENT) MaterialTheme.colorScheme.onSurfaceVariant
-                    else MaterialTheme.colorScheme.error,
-                )
-                if (norm != NormStatus.CURRENT) {
-                    TextButton(onClick = onFetchNorm, enabled = canFetchNorm && !busy) {
-                        Text("Download")
-                    }
-                }
-            }
         }
     }
 }

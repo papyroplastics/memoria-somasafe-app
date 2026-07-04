@@ -7,8 +7,6 @@ import app.somasafe.backend.data.saveWeights
 import app.somasafe.backend.data.trainableFile
 import app.somasafe.capture.data.CaptureRepository
 import app.somasafe.capture.domain.leFloats
-import app.somasafe.training.data.NormParams
-import app.somasafe.training.data.loadNormParams
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -33,18 +31,16 @@ private fun sigParam(signature: String, param: String) = "${signature}_$param:0"
  * the existing quantize/upload flow submits them as a federated update).
  *
  * The autoencoder is self-supervised — its target is the input BVP — so only the model
- * inputs are assembled per window: a z-scored `[BVP, ACC]` signal frame and the 8-d
+ * inputs are assembled per window: a raw `[BVP, ACC]` signal frame and the 8-d
  * conditioning vector `[static(6), context(2)]`. Windows without signal or without an
- * activity context are skipped; the score/label is unused. Everything is normalized
- * with the model's params (`/model/norm`) exactly as the backend does at load time.
+ * activity context are skipped; the score/label is unused. Everything is fed raw — the
+ * trainable model z-scores its own inputs in the train/eval signatures.
  */
 class Trainer(private val context: Context, private val repository: CaptureRepository) {
 
     suspend fun trainEpoch(modelKey: String, groupId: Long): TrainResult {
         val weights = loadWeights(context, modelKey)
             ?: error("weights not downloaded for '$modelKey'")
-        val norm = loadNormParams(context, modelKey)
-            ?: error("normalization params not downloaded for '$modelKey'")
         val static = repository.groupStatic(groupId)?.leFloats()
             ?: error("no demographics for group #$groupId; set the default demographics in the Captures tab")
         require(static.size == N_STATIC) { "expected $N_STATIC static values, got ${static.size}" }
@@ -55,9 +51,8 @@ class Trainer(private val context: Context, private val repository: CaptureRepos
             val acc = s.acc?.leFloats() ?: return@mapNotNull null
             val ctx = s.context?.leFloats() ?: return@mapNotNull null
             if (ppg.size != BVP_LEN || ctx.size != N_CONTEXT) return@mapNotNull null
-            // cond = [static(6), context(2)], normalized as one 8-d vector (backend window_cond_vectors).
-            val cond = normalize(static + ctx, norm.condMean, norm.condStd)
-            Window(signalFrame(ppg, acc, norm), cond)
+            // cond = [static(6), context(2)], fed raw; the model normalizes it.
+            Window(signalFrame(ppg, acc), static + ctx)
         }
 
         return withContext(Dispatchers.Default) {
@@ -100,15 +95,13 @@ class Trainer(private val context: Context, private val repository: CaptureRepos
         return batch to sig.inputs.map { it.name }
     }
 
-    /** One window frame: interleaved z-scored `[BVP, ACC]` (ACC resampled to BVP length). */
-    private fun signalFrame(bvp: FloatArray, acc: FloatArray, norm: NormParams): FloatArray {
+    /** One window frame: interleaved raw `[BVP, ACC]` (ACC resampled to BVP length). */
+    private fun signalFrame(bvp: FloatArray, acc: FloatArray): FloatArray {
         val acc512 = interp(acc, BVP_LEN)
         val out = FloatArray(BVP_LEN * N_SIGNALS)
-        val (bMean, aMean) = norm.signalMean[0] to norm.signalMean[1]
-        val (bStd, aStd) = norm.signalStd[0] to norm.signalStd[1]
         for (t in 0 until BVP_LEN) {
-            out[t * N_SIGNALS] = (bvp[t] - bMean) / bStd
-            out[t * N_SIGNALS + 1] = (acc512[t] - aMean) / aStd
+            out[t * N_SIGNALS] = bvp[t]
+            out[t * N_SIGNALS + 1] = acc512[t]
         }
         return out
     }
@@ -116,9 +109,6 @@ class Trainer(private val context: Context, private val repository: CaptureRepos
     private data class Window(val signal: FloatArray, val cond: FloatArray)
 
     private companion object {
-        fun normalize(x: FloatArray, mean: FloatArray, std: FloatArray): FloatArray =
-            FloatArray(x.size) { (x[it] - mean[it]) / std[it] }
-
         /** Linear resample matching numpy.interp over `linspace(0,1,·)` grids. */
         fun interp(src: FloatArray, target: Int): FloatArray {
             if (src.size == target) return src

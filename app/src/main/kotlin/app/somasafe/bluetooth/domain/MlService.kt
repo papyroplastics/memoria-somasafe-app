@@ -27,6 +27,7 @@ val ML_ERROR_NAMES = mapOf(
     3 to "TENSOR_ALLOC",
     4 to "INVOKE",
     5 to "INVALID_SHAPE",
+    6 to "PAYLOAD",
 )
 
 /**
