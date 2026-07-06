@@ -2,6 +2,7 @@ package app.somasafe.training.domain
 
 import android.content.Context
 import app.somasafe.backend.data.StoredWeights
+import app.somasafe.backend.data.loadModelMeta
 import app.somasafe.backend.data.loadWeights
 import app.somasafe.backend.data.saveWeights
 import app.somasafe.backend.data.trainableFile
@@ -27,8 +28,10 @@ private fun sigParam(signature: String, param: String) = "${signature}_$param:0"
 
 /**
  * Runs one local training epoch of a model over a processed capture group and writes
- * the trained weights back to `weights.json` (keeping the same base `weights_id`, so
- * the existing quantize/upload flow submits them as a federated update).
+ * the trained weights to `weights.json`, tagged with the base `weights_id` from
+ * `meta.json` (so the upload flows submit them against the right snapshot). The first
+ * epoch trains straight on the weights baked into the trainable model — the global
+ * snapshot; later epochs restore the locally trained weights first.
  *
  * The autoencoder is self-supervised — its target is the input BVP — so only the model
  * inputs are assembled per window: a raw `[BVP, ACC]` signal frame and the 8-d
@@ -39,8 +42,9 @@ private fun sigParam(signature: String, param: String) = "${signature}_$param:0"
 class Trainer(private val context: Context, private val repository: CaptureRepository) {
 
     suspend fun trainEpoch(modelKey: String, groupId: Long): TrainResult {
+        val baseId = loadModelMeta(context, modelKey)?.weightsId
+            ?: error("model '$modelKey' not downloaded")
         val weights = loadWeights(context, modelKey)
-            ?: error("weights not downloaded for '$modelKey'")
         val static = repository.groupStatic(groupId)?.leFloats()
             ?: error("no demographics for group #$groupId; set the default demographics in the Captures tab")
         require(static.size == N_STATIC) { "expected $N_STATIC static values, got ${static.size}" }
@@ -57,9 +61,9 @@ class Trainer(private val context: Context, private val repository: CaptureRepos
 
         return withContext(Dispatchers.Default) {
             LiteRtModel(trainableFile(context, modelKey).absolutePath).use { model ->
-                model.restoreWeights(weights.parameters)
+                if (weights != null) model.restoreWeights(weights.parameters)
                 val result = runEpoch(model, windows)
-                saveWeights(context, modelKey, weights.copy(parameters = model.saveWeights()))
+                saveWeights(context, modelKey, StoredWeights(model.saveWeights(), baseId))
                 result
             }
         }

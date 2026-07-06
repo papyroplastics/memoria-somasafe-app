@@ -2,7 +2,6 @@ package app.somasafe.bluetooth.domain
 
 import android.content.Context
 import android.util.Log
-import app.somasafe.backend.data.quantizedFile
 import app.somasafe.backend.data.trainableFile
 import app.somasafe.bluetooth.data.BleConnection
 import app.somasafe.training.domain.LiteRtModel
@@ -42,9 +41,10 @@ class ModelStaging(
         scope.launch {
             _model.value = ModelState.Loading
             try {
-                // The staged file is an opaque signed payload (norm params + tflite),
-                // uploaded verbatim; introspect the trainable model for the tensor sizes.
-                val bytes = withContext(Dispatchers.IO) { quantizedFile(context, key).readBytes() }
+                // The payload (signature + contract version + norm params + tflite) is
+                // framed here per the BLE interface version; introspect the trainable
+                // model for the tensor sizes.
+                val bytes = withContext(Dispatchers.IO) { buildModelPayload(context, key) }
                 val (featuresLen, scoreLen) =
                     withContext(Dispatchers.Default) { introspect(trainableFile(context, key).absolutePath) }
 

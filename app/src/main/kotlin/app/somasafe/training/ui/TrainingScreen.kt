@@ -24,17 +24,16 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import app.somasafe.backend.data.loadModelMeta
-import app.somasafe.backend.data.loadWeights
 import app.somasafe.capture.data.CaptureRepository
 import app.somasafe.capture.data.GroupSummary
 import app.somasafe.training.domain.Trainer
 
 /**
  * On-device training for one model: pick a processed capture group and run a local
- * epoch, writing the trained weights back to `weights.json`. Requires the model's
- * weights to be present (pulled under the Backend tab). The model z-scores its own
- * inputs, so no normalization params are needed here. After training, the model detail
- * screen's Quantize action uploads the result.
+ * epoch, writing the trained weights to `weights.json`. Requires the model to be
+ * downloaded (the trainable artifact carries the global weights baked in). The model
+ * z-scores its own inputs, so no normalization params are needed here. After training,
+ * the model detail screen's upload actions submit the result as the federated update.
  */
 @Composable
 fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {
@@ -46,11 +45,10 @@ fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {
     val groups by repository.groupSummaries().collectAsStateWithLifecycle(initialValue = emptyList())
     val meta = remember(modelKey) { loadModelMeta(context, modelKey) }
 
-    var hasWeights by remember(modelKey) { mutableStateOf(loadWeights(context, modelKey) != null) }
     var busy by remember(modelKey) { mutableStateOf(false) }
     var status by remember(modelKey) { mutableStateOf<String?>(null) }
 
-    val ready = hasWeights
+    val ready = meta?.weightsId != null
 
     Column(
         modifier = modifier
@@ -61,7 +59,7 @@ fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {
     ) {
         Text("Train ${meta?.name ?: modelKey}", style = MaterialTheme.typography.headlineSmall)
 
-        PrereqCard(hasWeights = hasWeights)
+        PrereqCard(hasModel = ready)
 
         status?.let {
             Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
@@ -87,7 +85,6 @@ fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {
                             },
                             onFailure = { "Training failed: ${it.message}" },
                         )
-                        hasWeights = loadWeights(context, modelKey) != null
                         busy = false
                     }
                 }
@@ -97,16 +94,16 @@ fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun PrereqCard(hasWeights: Boolean) {
+private fun PrereqCard(hasModel: Boolean) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(
-                if (hasWeights) "Weights: present" else "Weights: missing (download under Backend)",
+                if (hasModel) "Model: downloaded" else "Model: not downloaded (download under Backend)",
                 style = MaterialTheme.typography.bodySmall,
-                color = if (hasWeights) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                color = if (hasModel) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
             )
         }
     }

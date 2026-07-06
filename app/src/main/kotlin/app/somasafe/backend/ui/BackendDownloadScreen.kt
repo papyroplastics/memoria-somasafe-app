@@ -105,14 +105,14 @@ fun BackendDownloadScreen(
                             model = model,
                             localMeta = vm.localMetas[model.key],
                             state = vm.downloadStates[model.key] ?: DownloadState.Idle,
-                            weightsState = vm.weightsStates[model.key] ?: DownloadState.Idle,
-                            quantizeState = vm.quantizeStates[model.key] ?: DownloadState.Idle,
-                            showWeights = vm.localMetas[model.key] != null,
+                            quantizedState = vm.quantizedStates[model.key] ?: DownloadState.Idle,
+                            uploadState = vm.uploadStates[model.key] ?: DownloadState.Idle,
+                            submitState = vm.submitStates[model.key] ?: DownloadState.Idle,
                             weightsStatus = vm.weightsStatuses[model.key] ?: WeightsStatus.MISSING,
-                            quantizeEnabled = (vm.weightsStatuses[model.key] ?: WeightsStatus.MISSING) != WeightsStatus.MISSING,
                             onDownload = { vm.download(model) },
-                            onDownloadWeights = { vm.downloadWeightsFor(model) },
-                            onQuantize = { vm.quantize(model) },
+                            onDownloadQuantized = { vm.downloadQuantizedFor(model) },
+                            onUploadQuantize = { vm.uploadQuantize(model) },
+                            onSubmit = { vm.submit(model) },
                         )
                     }
             }
@@ -150,17 +150,18 @@ private fun ModelDownloadCard(
     model: RemoteModel,
     localMeta: RemoteModel?,
     state: DownloadState,
-    weightsState: DownloadState,
-    quantizeState: DownloadState,
-    showWeights: Boolean,
+    quantizedState: DownloadState,
+    uploadState: DownloadState,
+    submitState: DownloadState,
     weightsStatus: WeightsStatus,
-    quantizeEnabled: Boolean,
     onDownload: () -> Unit,
-    onDownloadWeights: () -> Unit,
-    onQuantize: () -> Unit,
+    onDownloadQuantized: () -> Unit,
+    onUploadQuantize: () -> Unit,
+    onSubmit: () -> Unit,
 ) {
-    // Up to date only if both the architecture and the weights match upstream.
+    // Up to date only if the version (architecture) and the weights snapshot match upstream.
     val isUpToDate = localMeta != null &&
+        localMeta.version == model.version &&
         localMeta.fingerprint == model.fingerprint &&
         localMeta.weightsVersion == model.weightsVersion
 
@@ -177,6 +178,15 @@ private fun ModelDownloadCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            if (!model.appCompatible) {
+                Text(
+                    "Requires app ≥ ${model.minAppVersion} — update the app to use this model.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                return@Column
+            }
 
             if (localMeta != null) {
                 Text(
@@ -233,16 +243,16 @@ private fun ModelDownloadCard(
                     }
             }
 
-            if (showWeights) {
-                WeightsRow(weightsState, weightsStatus, onDownloadWeights)
-                QuantizeRow(quantizeState, quantizeEnabled, onQuantize)
+            if (localMeta != null) {
+                QuantizedRow(quantizedState, onDownloadQuantized)
+                UploadSection(uploadState, submitState, weightsStatus, onUploadQuantize, onSubmit)
             }
         }
     }
 }
 
 @Composable
-private fun WeightsRow(state: DownloadState, status: WeightsStatus, onDownload: () -> Unit) {
+private fun QuantizedRow(state: DownloadState, onDownload: () -> Unit) {
     when (state) {
         DownloadState.InProgress ->
             Row(
@@ -250,65 +260,87 @@ private fun WeightsRow(state: DownloadState, status: WeightsStatus, onDownload: 
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                Text("Downloading weights…", style = MaterialTheme.typography.bodyMedium)
+                Text("Downloading quantized…", style = MaterialTheme.typography.bodyMedium)
             }
 
         is DownloadState.Error -> {
             Text(
-                "Weights error: ${state.message}",
+                "Quantized error: ${state.message}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
-            OutlinedButton(onClick = onDownload) { Text("Retry weights") }
+            OutlinedButton(onClick = onDownload) { Text("Retry quantized") }
         }
 
-        else -> {
-            val (statusText, statusColor) = when (status) {
-                WeightsStatus.MISSING -> "Weights: not downloaded" to MaterialTheme.colorScheme.onSurfaceVariant
-                WeightsStatus.OUTDATED -> "Weights: outdated" to MaterialTheme.colorScheme.primary
-                WeightsStatus.CURRENT -> "Weights: up to date" to MaterialTheme.colorScheme.onSurfaceVariant
-            }
-            Text(statusText, style = MaterialTheme.typography.bodySmall, color = statusColor)
+        else ->
             OutlinedButton(onClick = onDownload) {
-                Text(if (status == WeightsStatus.CURRENT) "Re-download weights" else "Download weights")
+                Text(if (state is DownloadState.Done) "Re-download quantized" else "Download quantized")
             }
-        }
     }
 }
 
+/** The federated upload actions, available once on-device training produced weights. */
 @Composable
-private fun QuantizeRow(state: DownloadState, enabled: Boolean, onQuantize: () -> Unit) {
-    when (state) {
-        DownloadState.InProgress ->
+private fun UploadSection(
+    uploadState: DownloadState,
+    submitState: DownloadState,
+    weightsStatus: WeightsStatus,
+    onUploadQuantize: () -> Unit,
+    onSubmit: () -> Unit,
+) {
+    val (statusText, statusColor) = when (weightsStatus) {
+        WeightsStatus.MISSING -> "No locally trained update" to MaterialTheme.colorScheme.onSurfaceVariant
+        WeightsStatus.OUTDATED -> "Trained update: based on older weights" to MaterialTheme.colorScheme.primary
+        WeightsStatus.CURRENT -> "Trained update: ready" to MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Text(statusText, style = MaterialTheme.typography.bodySmall, color = statusColor)
+
+    val enabled = weightsStatus != WeightsStatus.MISSING
+    val busy = uploadState is DownloadState.InProgress || submitState is DownloadState.InProgress
+
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = onUploadQuantize, enabled = enabled && !busy) {
+            Text("Upload & quantize")
+        }
+        OutlinedButton(onClick = onSubmit, enabled = enabled && !busy) {
+            Text("Submit only")
+        }
+    }
+
+    when {
+        uploadState is DownloadState.InProgress ->
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                Text("Quantizing…", style = MaterialTheme.typography.bodyMedium)
+                Text("Uploading & quantizing…", style = MaterialTheme.typography.bodyMedium)
             }
-
-        is DownloadState.Error -> {
+        submitState is DownloadState.InProgress ->
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                Text("Submitting…", style = MaterialTheme.typography.bodyMedium)
+            }
+        uploadState is DownloadState.Error ->
             Text(
-                "Quantize error: ${state.message}",
+                "Upload error: ${uploadState.message}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
-            OutlinedButton(onClick = onQuantize, enabled = enabled) { Text("Retry quantize") }
-        }
-
-        is DownloadState.Done ->
-            OutlinedButton(onClick = onQuantize, enabled = enabled) { Text("Re-quantize") }
-
-        DownloadState.Idle -> {
-            OutlinedButton(onClick = onQuantize, enabled = enabled) { Text("Quantize") }
-            if (!enabled) {
-                Text(
-                    "Download weights first.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
+        submitState is DownloadState.Error ->
+            Text(
+                "Submit error: ${submitState.message}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        submitState is DownloadState.Done ->
+            Text(
+                "Submitted (${submitState.path})",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.secondary,
+            )
     }
 }

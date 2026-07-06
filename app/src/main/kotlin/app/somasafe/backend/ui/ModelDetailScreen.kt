@@ -34,11 +34,12 @@ import app.somasafe.backend.data.QuantStatus
 import app.somasafe.backend.data.RemoteModel
 import app.somasafe.backend.data.WeightsStatus
 import app.somasafe.backend.data.downloadQuantized
-import app.somasafe.backend.data.downloadWeights
 import app.somasafe.backend.data.loadModelMeta
 import app.somasafe.backend.data.modelDir
 import app.somasafe.backend.data.quantStatus
+import app.somasafe.backend.data.submitOnly
 import app.somasafe.backend.data.trainableFile
+import app.somasafe.backend.data.uploadAndQuantize
 import app.somasafe.backend.data.weightsStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -166,14 +167,21 @@ private fun ModelWeightsSection(modelKey: String, meta: RemoteModel?) {
     var busy by remember(modelKey) { mutableStateOf(false) }
     var message by remember(modelKey) { mutableStateOf<String?>(null) }
 
-    // Read meta.json fresh: downloadWeights advances its upstream weights pointer,
-    // so the in-memory snapshot would otherwise look stale right after a pull.
     suspend fun refresh() = withContext(Dispatchers.IO) {
-        weights = loadModelMeta(context, modelKey)?.let { weightsStatus(context, it) } ?: WeightsStatus.MISSING
+        weights = weightsStatus(context, modelKey)
         quant = quantStatus(context, modelKey)
     }
 
     LaunchedEffect(modelKey, meta) { refresh() }
+
+    fun run(action: suspend () -> String) {
+        scope.launch {
+            busy = true
+            message = action()
+            refresh()
+            busy = false
+        }
+    }
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -181,49 +189,54 @@ private fun ModelWeightsSection(modelKey: String, meta: RemoteModel?) {
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
+                Button(
                     onClick = {
-                        if (meta != null) {
-                            scope.launch {
-                                busy = true
-                                message = downloadWeights(context, meta).fold(
-                                    onSuccess = { "Weights downloaded" },
-                                    onFailure = { "Download failed: ${it.message}" },
-                                )
-                                refresh()
-                                busy = false
-                            }
+                        if (meta != null) run {
+                            downloadQuantized(context, meta).fold(
+                                onSuccess = { "Quantized model downloaded" },
+                                onFailure = { "Download failed: ${it.message}" },
+                            )
                         }
                     },
                     enabled = !busy && meta != null,
-                ) { Text("Download weights") }
-
-                Button(
-                    onClick = {
-                        if (meta != null) {
-                            scope.launch {
-                                busy = true
-                                message = downloadQuantized(context, meta).fold(
-                                    onSuccess = { "Quantized model downloaded" },
-                                    onFailure = { "Quantize failed: ${it.message}" },
-                                )
-                                refresh()
-                                busy = false
-                            }
-                        }
-                    },
-                    enabled = !busy && meta != null && weights != WeightsStatus.MISSING,
                 ) { Text("Download quantized") }
             }
 
+            // The federated upload paths, available once training produced weights.
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        if (meta != null) run {
+                            uploadAndQuantize(context, meta).fold(
+                                onSuccess = { "Update uploaded; personalized quantized model stored" },
+                                onFailure = { "Upload failed: ${it.message}" },
+                            )
+                        }
+                    },
+                    enabled = !busy && meta != null && weights != WeightsStatus.MISSING,
+                ) { Text("Upload & quantize") }
+
+                OutlinedButton(
+                    onClick = {
+                        if (meta != null) run {
+                            submitOnly(context, meta).fold(
+                                onSuccess = { "Update submitted (#$it)" },
+                                onFailure = { "Submit failed: ${it.message}" },
+                            )
+                        }
+                    },
+                    enabled = !busy && meta != null && weights != WeightsStatus.MISSING,
+                ) { Text("Submit only") }
+            }
+
             val weightsText = when (weights) {
-                WeightsStatus.MISSING -> "Weights: not downloaded"
-                WeightsStatus.OUTDATED -> "Weights: outdated (re-download)"
-                WeightsStatus.CURRENT -> "Weights: up to date"
+                WeightsStatus.MISSING -> "Trained update: none"
+                WeightsStatus.OUTDATED -> "Trained update: based on older weights"
+                WeightsStatus.CURRENT -> "Trained update: ready"
             }
             val quantText = when (quant) {
                 QuantStatus.MISSING -> "Quantized model: none"
-                QuantStatus.OUTDATED -> "Quantized model: outdated (re-quantize)"
+                QuantStatus.OUTDATED -> "Quantized model: outdated"
                 QuantStatus.CURRENT -> "Quantized model: up to date"
             }
             Text(
@@ -270,7 +283,7 @@ private fun ModelMetaCard(meta: RemoteModel) {
                 )
             }
             Text(
-                "App: ≥ ${meta.appVersion}",
+                "App: ≥ ${meta.minAppVersion}  ·  Contract: v${meta.contractVersion}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

@@ -2,6 +2,7 @@ package app.somasafe.backend.data
 
 import android.content.Context
 import app.somasafe.BuildConfig
+import app.somasafe.capture.domain.leBytes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -10,16 +11,22 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Base64
 
 const val BACKEND_URL = BuildConfig.BACKEND_URL
 const val TRAINABLE_FILENAME = "trainable.tflite"
 const val QUANTIZED_FILENAME = "quantized.tflite"
+const val QUANTIZED_META_FILENAME = "quantized.json"
 const val WEIGHTS_FILENAME = "weights.json"
 const val META_FILENAME = "meta.json"
 
 const val FINGERPRINT_HEADER = "X-Model-Fingerprint"
+const val MODEL_VERSION_HEADER = "X-Model-Version"
 const val WEIGHTS_ID_HEADER = "X-Weights-ID"
 const val WEIGHTS_TIMESTAMP_HEADER = "X-Weights-Timestamp"
+const val SIGNATURE_HEADER = "X-Model-Signature"
+const val CONTRACT_VERSION_HEADER = "X-Contract-Version"
+const val NORM_PARAMS_HEADER = "X-Norm-Params"
 
 fun modelsDir(context: Context): File = File(context.filesDir, "models")
 
@@ -27,42 +34,67 @@ fun modelDir(context: Context, key: String): File = File(modelsDir(context), key
 
 fun metaFile(context: Context, key: String): File = File(modelDir(context, key), META_FILENAME)
 
-/** Trainable LiteRT model downloaded from the backend (has eval/train/save/restore). */
+/** Trainable LiteRT model downloaded from the backend (has eval/train/save/restore).
+ *  Carries the current global weights baked in — it is the weights source. */
 fun trainableFile(context: Context, key: String): File = File(modelDir(context, key), TRAINABLE_FILENAME)
 
-/** Int8-quantized model produced by the backend from extracted weights; uploaded to the device. */
+/** Int8-quantized model downloaded or produced by the backend; uploaded to the device. */
 fun quantizedFile(context: Context, key: String): File = File(modelDir(context, key), QUANTIZED_FILENAME)
 
-/** Local source of truth for the model's weights (`weights.json`): the flat
- *  parameters plus the version metadata (`weights_id`, version, fingerprint) the
- *  /quantize endpoint needs. Pulled from the backend, not extracted from the model. */
+/** Signed fields delivered alongside the quantized model (`quantized.json`): the
+ *  contract version, the norm params, and the server's ECDSA signature over the
+ *  canonical bytes. Needed to assemble the device payload. */
+fun quantizedMetaFile(context: Context, key: String): File = File(modelDir(context, key), QUANTIZED_META_FILENAME)
+
+/** Locally trained weights (`weights.json`), written only by on-device training. */
 fun weightsFile(context: Context, key: String): File = File(modelDir(context, key), WEIGHTS_FILENAME)
+
+/** Whether this app satisfies a model's `min_app_version` (dot-separated numeric
+ *  parts, missing parts count as 0 — so "1.0" satisfies "1.0.0"). */
+fun versionAtLeast(local: String, required: String): Boolean {
+    val a = local.split('.').map { it.toIntOrNull() ?: 0 }
+    val b = required.split('.').map { it.toIntOrNull() ?: 0 }
+    for (i in 0 until maxOf(a.size, b.size)) {
+        val x = a.getOrElse(i) { 0 }
+        val y = b.getOrElse(i) { 0 }
+        if (x != y) return x > y
+    }
+    return true
+}
 
 data class RemoteModel(
     val key: String,
     val name: String,
     val purpose: String,
     val firmwareId: Int?,
-    val appVersion: String,
-    val fingerprint: String,        // architecture identity (weight-compatibility key)
-    val version: String,            // human-facing display label
+    val minAppVersion: String,
+    val fingerprint: String,        // architecture identity (tripwire for the version)
+    val version: Int,               // hand-bumped model version; a move invalidates local state
+    val contractVersion: Int,       // how the model is fed (norm-param layout + I/O signatures)
+    val paramCount: Int,
     val weightsVersion: String?,    // timestamp of the latest global weights (null if none)
+    val weightsId: Long? = null,    // base snapshot id; set from headers when the trainable is downloaded
 ) {
     val trainableEndpoint: String get() = "$BACKEND_URL/model/download/trainable/$key"
     val quantizedEndpoint: String get() = "$BACKEND_URL/model/download/quantized/$key"
-    val quantizeEndpoint: String get() = "$BACKEND_URL/model/quantize/$key"
-    val weightsEndpoint: String get() = "$BACKEND_URL/model/weights/$key"
+    fun quantizeSubmitEndpoint(weightsId: Long): String = "$BACKEND_URL/model/quantize/submit/$key/$weightsId"
+    fun submitEndpoint(weightsId: Long): String = "$BACKEND_URL/model/submit/$key/$weightsId"
     fun resultEndpoint(jobId: String): String = "$BACKEND_URL/model/quantize/result/$jobId"
+
+    val appCompatible: Boolean get() = versionAtLeast(BuildConfig.VERSION_NAME, minAppVersion)
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("key", key)
         put("name", name)
         put("purpose", purpose)
         if (firmwareId != null) put("firmware_id", firmwareId) else put("firmware_id", JSONObject.NULL)
-        put("app_version", appVersion)
+        put("min_app_version", minAppVersion)
         put("fingerprint", fingerprint)
         put("version", version)
+        put("contract_version", contractVersion)
+        put("param_count", paramCount)
         if (weightsVersion != null) put("weights_version", weightsVersion) else put("weights_version", JSONObject.NULL)
+        if (weightsId != null) put("weights_id", weightsId)
     }
 
     companion object {
@@ -71,10 +103,13 @@ data class RemoteModel(
             name = obj.getString("name"),
             purpose = obj.getString("purpose"),
             firmwareId = if (obj.isNull("firmware_id")) null else obj.getInt("firmware_id"),
-            appVersion = obj.getString("app_version"),
+            minAppVersion = obj.getString("min_app_version"),
             fingerprint = obj.getString("fingerprint"),
-            version = obj.getString("version"),
+            version = obj.getInt("version"),
+            contractVersion = obj.getInt("contract_version"),
+            paramCount = obj.getInt("param_count"),
             weightsVersion = if (obj.isNull("weights_version")) null else obj.getString("weights_version"),
+            weightsId = if (obj.has("weights_id") && !obj.isNull("weights_id")) obj.getLong("weights_id") else null,
         )
     }
 }
@@ -86,6 +121,45 @@ fun saveModelMeta(context: Context, model: RemoteModel) {
 
 fun loadModelMeta(context: Context, key: String): RemoteModel? =
     runCatching { RemoteModel.fromJson(JSONObject(metaFile(context, key).readText())) }.getOrNull()
+
+/** The signed fields the backend delivers with a quantized model, persisted as
+ *  `quantized.json`. [signature] is null only when the server ran without a key. */
+data class SignedModelMeta(
+    val contractVersion: Int,
+    val normParams: ByteArray,
+    val signature: ByteArray?,
+) {
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("contract_version", contractVersion)
+        put("norm_params", Base64.getEncoder().encodeToString(normParams))
+        if (signature != null) put("signature", Base64.getEncoder().encodeToString(signature))
+        else put("signature", JSONObject.NULL)
+    }
+
+    companion object {
+        fun fromJson(o: JSONObject): SignedModelMeta = SignedModelMeta(
+            contractVersion = o.getInt("contract_version"),
+            normParams = Base64.getDecoder().decode(o.getString("norm_params")),
+            signature = if (o.isNull("signature")) null else Base64.getDecoder().decode(o.getString("signature")),
+        )
+
+        fun fromHeaders(connection: HttpURLConnection): SignedModelMeta = SignedModelMeta(
+            contractVersion = connection.getHeaderField(CONTRACT_VERSION_HEADER)?.toInt()
+                ?: error("missing $CONTRACT_VERSION_HEADER header"),
+            normParams = Base64.getDecoder().decode(
+                connection.getHeaderField(NORM_PARAMS_HEADER) ?: error("missing $NORM_PARAMS_HEADER header")),
+            signature = connection.getHeaderField(SIGNATURE_HEADER)?.let { Base64.getDecoder().decode(it) },
+        )
+    }
+}
+
+fun saveSignedModelMeta(context: Context, key: String, meta: SignedModelMeta) {
+    modelDir(context, key).mkdirs()
+    quantizedMetaFile(context, key).writeText(meta.toJson().toString())
+}
+
+fun loadSignedModelMeta(context: Context, key: String): SignedModelMeta? =
+    runCatching { SignedModelMeta.fromJson(JSONObject(quantizedMetaFile(context, key).readText())) }.getOrNull()
 
 /** A model whose quantized variant is available locally, ready to upload to a device. */
 data class LocalModel(val key: String, val displayName: String, val modelFile: File)
@@ -161,45 +235,80 @@ suspend fun fetchModels(context: Context): Result<List<RemoteModel>> =
         List(array.length()) { i -> RemoteModel.fromJson(array.getJSONObject(i)) }
     }
 
-suspend fun downloadModel(context: Context, url: String, dest: File): Result<Unit> =
-    authedRequest(context, url) { connection ->
+/**
+ * Download the model's trainable artifact — the architecture with the current
+ * global weights baked in — and record the snapshot it carries (`weights_id` /
+ * timestamp headers) in `meta.json`. When the version or fingerprint moved
+ * relative to what was stored, the local federated state (trained weights,
+ * quantized artifact) is deleted first: it belongs to the superseded version.
+ */
+suspend fun downloadTrainable(context: Context, model: RemoteModel): Result<Unit> =
+    authedRequest(context, model.trainableEndpoint) { connection ->
+        val weightsId = connection.getHeaderField(WEIGHTS_ID_HEADER)?.toLong()
+            ?: error("missing $WEIGHTS_ID_HEADER header")
+        val version = connection.getHeaderField(MODEL_VERSION_HEADER)?.toInt() ?: model.version
+        val fingerprint = connection.getHeaderField(FINGERPRINT_HEADER) ?: model.fingerprint
+
+        val previous = loadModelMeta(context, model.key)
+        if (previous != null && (previous.version != version || previous.fingerprint != fingerprint)) {
+            weightsFile(context, model.key).delete()
+            quantizedFile(context, model.key).delete()
+            quantizedMetaFile(context, model.key).delete()
+        }
+
+        val dest = trainableFile(context, model.key)
         dest.parentFile?.mkdirs()
         connection.inputStream.use { input ->
             dest.outputStream().use { output -> input.copyTo(output) }
         }
+        saveModelMeta(context, model.copy(
+            version = version,
+            fingerprint = fingerprint,
+            weightsId = weightsId,
+            weightsVersion = connection.getHeaderField(WEIGHTS_TIMESTAMP_HEADER) ?: model.weightsVersion,
+        ))
+    }
+
+private fun storeSignedModel(context: Context, key: String, connection: HttpURLConnection) {
+    val meta = SignedModelMeta.fromHeaders(connection)
+    val dest = quantizedFile(context, key)
+    dest.parentFile?.mkdirs()
+    connection.inputStream.use { input ->
+        dest.outputStream().use { output -> input.copyTo(output) }
+    }
+    saveSignedModelMeta(context, key, meta)
+}
+
+/** Download the current global quantized artifact plus its signed fields. */
+suspend fun downloadQuantized(context: Context, model: RemoteModel): Result<Unit> =
+    authedRequest(context, model.quantizedEndpoint) { connection ->
+        storeSignedModel(context, model.key, connection)
     }
 
 const val QUANTIZE_POLL_INTERVAL_MS = 1000L
 const val QUANTIZE_POLL_TIMEOUT_MS = 120_000L
 
-/**
- * POST a JSON weights body to the (async) /quantize endpoint and return the
- * job id to poll. The gateway enqueues the work and replies `202 {job_id}`.
- */
-suspend fun submitQuantize(context: Context, url: String, jsonBody: ByteArray): Result<String> =
-    authedRequest(
-        context, url,
-        configure = { connection ->
-            connection.requestMethod = "POST"
-            connection.doOutput = true
-            connection.setRequestProperty("Content-Type", "application/json")
-            connection.outputStream.use { it.write(jsonBody) }
-        },
-        onSuccess = { connection ->
-            JSONObject(connection.inputStream.bufferedReader().readText()).getString("job_id")
-        },
-    )
+private fun HttpURLConnection.sendWeights(body: ByteArray) {
+    requestMethod = "POST"
+    doOutput = true
+    setRequestProperty("Content-Type", "application/octet-stream")
+    outputStream.use { it.write(body) }
+}
+
+/** Load the locally trained weights and the base snapshot they derive from. */
+private fun trainedWeights(context: Context, key: String): StoredWeights =
+    loadWeights(context, key) ?: error("no locally trained weights for '$key'")
 
 /**
- * Poll the result endpoint until the worker has produced the int8 model,
- * streaming it into [dest]. `202` means still pending/running (keep waiting),
- * `200` carries the tflite, anything else (e.g. `422` failed) is an error.
- * A `401` mid-poll triggers a token refresh and the poll continues.
+ * Poll the quantize-result endpoint until the worker has produced the int8
+ * model, storing it (with its signed header fields) as the model's quantized
+ * artifact. `202` means still pending/running (keep waiting), `200` carries the
+ * tflite, anything else (e.g. `422` failed) is an error. A `401` mid-poll
+ * triggers a token refresh and the poll continues.
  */
-suspend fun pollQuantizeResult(context: Context, url: String, dest: File): Result<Unit> =
+suspend fun pollQuantizeResult(context: Context, url: String, key: String): Result<Unit> =
     withContext(Dispatchers.IO) {
         runCatching {
-            dest.parentFile?.mkdirs()
             var token = AuthStore.accessToken(context) ?: throw NotSignedInException()
             val deadline = System.currentTimeMillis() + QUANTIZE_POLL_TIMEOUT_MS
             var done = false
@@ -209,9 +318,7 @@ suspend fun pollQuantizeResult(context: Context, url: String, dest: File): Resul
                     connection.setRequestProperty("Authorization", "Bearer $token")
                     when (val code = connection.responseCode) {
                         HttpURLConnection.HTTP_OK -> {
-                            connection.inputStream.use { input ->
-                                dest.outputStream().use { output -> input.copyTo(output) }
-                            }
+                            storeSignedModel(context, key, connection)
                             done = true
                             false
                         }
@@ -238,22 +345,37 @@ suspend fun pollQuantizeResult(context: Context, url: String, dest: File): Resul
     }
 
 /**
- * Submit the locally stored weights to the backend, then poll for the resulting
- * int8 model and store it as `quantized.tflite`. The submission carries the
- * `weights_id` recorded in `weights.json` (the snapshot the parameters derive
- * from), so aggregation knows the base each update was trained against. Fails if
- * weights have not been downloaded yet.
+ * Upload the locally trained weights (raw LE float32 body, base `weights_id` in
+ * the URL) as a federated update, then poll for the personalized signed int8
+ * artifact and store it as the model's quantized artifact. Requires on-device
+ * training to have produced `weights.json`.
  */
-suspend fun downloadQuantized(context: Context, model: RemoteModel): Result<Unit> =
+suspend fun uploadAndQuantize(context: Context, model: RemoteModel): Result<Unit> =
     withContext(Dispatchers.IO) {
         runCatching {
-            val weights = loadWeights(context, model.key) ?: error("weights not downloaded yet")
-            val body = JSONObject()
-                .put("parameters", JSONArray().apply { weights.parameters.forEach { put(it.toDouble()) } })
-                .put("weights_id", weights.weightsId)
-                .toString().toByteArray()
-            val jobId = submitQuantize(context, model.quantizeEndpoint, body).getOrThrow()
-            pollQuantizeResult(context, model.resultEndpoint(jobId), quantizedFile(context, model.key))
-                .getOrThrow()
+            val weights = trainedWeights(context, model.key)
+            val jobId = authedRequest(
+                context, model.quantizeSubmitEndpoint(weights.weightsId),
+                configure = { it.sendWeights(weights.parameters.leBytes()) },
+                onSuccess = { JSONObject(it.inputStream.bufferedReader().readText()).getString("job_id") },
+            ).getOrThrow()
+            pollQuantizeResult(context, model.resultEndpoint(jobId), model.key).getOrThrow()
+        }
+    }
+
+/**
+ * Submit-only federated update: the trained weights are uploaded for aggregation
+ * and nothing comes back (validation happens server-side, silently). Returns the
+ * submission id.
+ */
+suspend fun submitOnly(context: Context, model: RemoteModel): Result<Long> =
+    withContext(Dispatchers.IO) {
+        runCatching {
+            val weights = trainedWeights(context, model.key)
+            authedRequest(
+                context, model.submitEndpoint(weights.weightsId),
+                configure = { it.sendWeights(weights.parameters.leBytes()) },
+                onSuccess = { JSONObject(it.inputStream.bufferedReader().readText()).getLong("submission_id") },
+            ).getOrThrow()
         }
     }
