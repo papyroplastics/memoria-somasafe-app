@@ -2,6 +2,10 @@ package app.somasafe.bluetooth.data
 
 import java.util.UUID
 
+/** The app↔firmware BLE contract version this build implements; mirrors
+ *  BLE_INTERFACE_VERSION in firmware/main/ble/host.h. */
+const val BLE_INTERFACE_VERSION = 1
+
 /**
  * GATT attribute UUIDs exposed by the firmware (see firmware/main/ble/gatt.c
  * and the firmware READMEs). Mirrors firmware/scripts/lib/ble_common.py.
@@ -28,4 +32,12 @@ object SomaSafeUuids {
 
     // PPG service (raw sensor stream).
     val PPG_DATA_CHR: UUID = UUID.fromString("b8e9a347-5c12-4f89-a7d3-2e1f6b0c4a9d")
+
+    // OTA service — firmware updates: running-version readout, image/signature
+    // uploads, and the state characteristic driving the update state machine.
+    val OTA_SVC: UUID = UUID.fromString("b1a7f5d2-40c8-4de1-9e8a-2f6c03d94b17")
+    val OTA_VERSION_CHR: UUID = UUID.fromString("7a3f9c41-88e5-4b26-a017-c25d3e880f6b")
+    val OTA_DATA_CHR: UUID = UUID.fromString("1c6e2b90-f4a3-4c58-b7d1-64e80a52c9de")
+    val OTA_STATE_CHR: UUID = UUID.fromString("e94d17ab-30c6-45f2-8a5e-91b04dc73fa8")
+    val OTA_SIGNATURE_CHR: UUID = UUID.fromString("58f2ce3d-1b09-4e7c-9d44-af06b3752e81")
 }

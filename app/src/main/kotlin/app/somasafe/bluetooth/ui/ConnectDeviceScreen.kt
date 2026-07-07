@@ -48,6 +48,7 @@ fun ConnectDeviceScreen(
     connection: BleConnection,
     controller: DeviceSession,
     modifier: Modifier = Modifier,
+    onOpenFirmwareUpdate: () -> Unit = {},
 ) {
     val context = LocalContext.current
 
@@ -103,6 +104,11 @@ fun ConnectDeviceScreen(
             connected = connected,
             onStart = controller::startCapture,
             onStop = controller::stopCapture,
+        )
+
+        FirmwareCard(
+            connected = connected,
+            onOpen = onOpenFirmwareUpdate,
         )
 
         status?.let {
@@ -243,6 +249,24 @@ private fun CaptureCard(
                     enabled = connected && modelLoaded,
                 ) { Text("Start capture") }
             }
+        }
+    }
+}
+
+@Composable
+private fun FirmwareCard(connected: Boolean, onOpen: () -> Unit) {
+    Card {
+        Column(
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Firmware", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Install a downloaded firmware image over the air.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(onClick = onOpen, enabled = connected) { Text("Update firmware") }
         }
     }
 }

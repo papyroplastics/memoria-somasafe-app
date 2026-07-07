@@ -1,5 +1,6 @@
 package app.somasafe.backend.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -30,9 +31,11 @@ import androidx.compose.ui.unit.dp
 import app.somasafe.backend.data.AuthStore
 import app.somasafe.backend.data.BACKEND_URL
 import app.somasafe.backend.data.DownloadState
+import app.somasafe.backend.data.RemoteFirmware
 import app.somasafe.backend.data.RemoteModel
 import app.somasafe.backend.data.WeightsStatus
 import app.somasafe.backend.data.logout
+import app.somasafe.bluetooth.data.BLE_INTERFACE_VERSION
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -42,6 +45,7 @@ fun BackendDownloadScreen(
     modifier: Modifier = Modifier,
     onLogout: () -> Unit = {},
     onOpenLocalModels: () -> Unit = {},
+    onOpenLocalFirmware: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -60,7 +64,7 @@ fun BackendDownloadScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text("Download Models", style = MaterialTheme.typography.headlineSmall)
+            Text("Backend", style = MaterialTheme.typography.headlineSmall)
             Text(
                 "Backend: $BACKEND_URL",
                 style = MaterialTheme.typography.bodySmall,
@@ -77,20 +81,14 @@ fun BackendDownloadScreen(
                         onLogout()
                     }
                 },
-                onOpenLocalModels = onOpenLocalModels,
             )
 
             HorizontalDivider()
 
+            SectionHeader("Models", onOpen = onOpenLocalModels)
+
             when (val state = vm.listState) {
-                ModelListState.Loading ->
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        Text("Loading models…", style = MaterialTheme.typography.bodyMedium)
-                    }
+                ModelListState.Loading -> LoadingRow("Loading models…")
 
                 is ModelListState.Error ->
                     Text(
@@ -116,6 +114,39 @@ fun BackendDownloadScreen(
                         )
                     }
             }
+
+            HorizontalDivider()
+
+            SectionHeader("Firmware", onOpen = onOpenLocalFirmware)
+
+            when (val state = vm.firmwareListState) {
+                FirmwareListState.Loading -> LoadingRow("Loading firmware…")
+
+                is FirmwareListState.Error ->
+                    Text(
+                        "Failed to load firmware: ${state.message}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+
+                is FirmwareListState.Loaded ->
+                    if (state.versions.isEmpty()) {
+                        Text(
+                            "No firmware published for interface $BLE_INTERFACE_VERSION.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        state.versions.forEach { firmware ->
+                            FirmwareDownloadCard(
+                                firmware = firmware,
+                                downloaded = firmware.version in vm.localFirmwareVersions,
+                                state = vm.firmwareDownloadStates[firmware.version] ?: DownloadState.Idle,
+                                onDownload = { vm.downloadFirmwareFor(firmware) },
+                            )
+                        }
+                    }
+            }
         }
     }
 }
@@ -124,7 +155,6 @@ fun BackendDownloadScreen(
 private fun SessionHeader(
     username: String,
     onLogout: () -> Unit,
-    onOpenLocalModels: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -135,12 +165,95 @@ private fun SessionHeader(
             "Signed in as $username",
             style = MaterialTheme.typography.bodyMedium,
         )
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        TextButton(onClick = onLogout) { Text("Log out") }
+    }
+}
+
+/** A section title with a trailing arrow opening its local-management screen. */
+@Composable
+private fun SectionHeader(title: String, onOpen: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Downloaded →",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    }
+}
+
+@Composable
+private fun LoadingRow(text: String) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+        Text(text, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun FirmwareDownloadCard(
+    firmware: RemoteFirmware,
+    downloaded: Boolean,
+    state: DownloadState,
+    onDownload: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            TextButton(onClick = onOpenLocalModels) { Text("Downloaded models") }
-            TextButton(onClick = onLogout) { Text("Log out") }
+            Text("Firmware ${firmware.version}", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Contracts: ${firmware.supportedContracts.joinToString(", ")}" +
+                    "  ·  ${formatFileSize(firmware.size)}" +
+                    "  ·  ${firmware.createdAt.take(10)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (downloaded) {
+                Text(
+                    "Downloaded",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+
+            when (state) {
+                DownloadState.InProgress -> LoadingRow("Downloading…")
+
+                is DownloadState.Error -> {
+                    Text(
+                        "Error: ${state.message}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Button(onClick = onDownload) { Text("Retry") }
+                }
+
+                else ->
+                    if (downloaded) {
+                        Button(
+                            onClick = onDownload,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            ),
+                        ) { Text("Download") }
+                    } else {
+                        Button(onClick = onDownload) { Text("Download") }
+                    }
+            }
         }
     }
 }

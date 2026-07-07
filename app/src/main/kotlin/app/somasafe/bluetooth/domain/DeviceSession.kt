@@ -2,6 +2,7 @@ package app.somasafe.bluetooth.domain
 
 import android.content.Context
 import android.util.Log
+import app.somasafe.backend.data.LocalFirmware
 import app.somasafe.bluetooth.data.BleConnection
 import app.somasafe.capture.data.CaptureRepository
 import app.somasafe.capture.data.loadDemographics
@@ -35,10 +36,12 @@ class DeviceSession(
     private val repository = CaptureRepository(context)
     private val attestation = Attestation(context, connection, scope)
     private val staging = ModelStaging(context, connection, scope)
+    private val firmware = FirmwareUpdate(connection, scope)
 
     val model = staging.model
     val attest = attestation.attest
     val ownedDevices = attestation.ownedDevices
+    val ota = firmware.state
     val groupSummaries = repository.groupSummaries()
 
     private val _capture = MutableStateFlow<CaptureState>(CaptureState.Idle)
@@ -52,6 +55,10 @@ class DeviceSession(
     fun loadModel(key: String) = staging.loadModel(key) { _status.value = it }
 
     fun attestDevice() = attestation.attestDevice { _status.value = it }
+
+    fun installFirmware(fw: LocalFirmware) = firmware.install(fw) { _status.value = it }
+
+    suspend fun readFirmwareVersion() = firmware.readVersion()
 
     fun startCapture() {
         if (_capture.value is CaptureState.Running) return

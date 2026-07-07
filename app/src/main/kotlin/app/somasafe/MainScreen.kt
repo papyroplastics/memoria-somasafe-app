@@ -37,11 +37,13 @@ import app.somasafe.backend.data.AuthStore
 import app.somasafe.backend.ui.BackendDownloadScreen
 import app.somasafe.backend.ui.BackendLoginScreen
 import app.somasafe.backend.ui.BackendModelsViewModel
+import app.somasafe.backend.ui.FirmwareListScreen
 import app.somasafe.backend.ui.ModelDetailScreen
 import app.somasafe.backend.ui.ModelListScreen
 import app.somasafe.bluetooth.ui.BluetoothPermissionBox
 import app.somasafe.bluetooth.ui.ConnectDeviceScreen
 import app.somasafe.bluetooth.ui.FindDevicesScreen
+import app.somasafe.bluetooth.ui.FirmwareInstallScreen
 import app.somasafe.bluetooth.ui.LocalBluetoothSession
 import app.somasafe.bluetooth.ui.ProvideBluetoothSession
 import app.somasafe.capture.ui.CaptureScreen
@@ -57,11 +59,13 @@ import kotlin.reflect.KClass
 
 @Serializable private object DeviceList
 @Serializable private object DeviceDetail
+@Serializable private object FirmwareInstall
 @Serializable private object Captures
 @Serializable private object Demographics
 @Serializable private object BackendLogin
 @Serializable private object BackendHome
 @Serializable private object ModelList
+@Serializable private object FirmwareList
 @Serializable private data class ModelDetail(val key: String)
 @Serializable private data class TrainingRoute(val key: String)
 
@@ -73,8 +77,8 @@ private enum class AppTab(val title: String, val icon: ImageVector, val graph: A
 
 // Destinations that sit above a tab's root, so they show a back arrow.
 private val CHILD_ROUTES: List<KClass<*>> =
-    listOf(DeviceDetail::class, Demographics::class, ModelList::class, ModelDetail::class,
-        TrainingRoute::class)
+    listOf(DeviceDetail::class, FirmwareInstall::class, Demographics::class, ModelList::class,
+        FirmwareList::class, ModelDetail::class, TrainingRoute::class)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -154,9 +158,22 @@ fun MainScreen() = ProvideBluetoothSession {
                         val conn = session.connection
                         val ctrl = session.controller
                         if (d != null && conn != null && ctrl != null) {
-                            ConnectDeviceScreen(d, conn, ctrl)
+                            ConnectDeviceScreen(
+                                d, conn, ctrl,
+                                onOpenFirmwareUpdate = { navController.navigate(FirmwareInstall) },
+                            )
                         } else {
                             // Device was cleared out from under us; fall back to the list.
+                            LaunchedEffect(Unit) { navController.navigateUp() }
+                        }
+                    }
+                }
+                composable<FirmwareInstall> {
+                    BluetoothPermissionBox {
+                        val ctrl = session.controller
+                        if (ctrl != null) {
+                            FirmwareInstallScreen(ctrl, onDone = { navController.navigateUp() })
+                        } else {
                             LaunchedEffect(Unit) { navController.navigateUp() }
                         }
                     }
@@ -198,11 +215,13 @@ fun MainScreen() = ProvideBluetoothSession {
                             }
                         },
                         onOpenLocalModels = { navController.navigate(ModelList) },
+                        onOpenLocalFirmware = { navController.navigate(FirmwareList) },
                     )
                 }
                 composable<ModelList> {
                     ModelListScreen { navController.navigate(ModelDetail(it)) }
                 }
+                composable<FirmwareList> { FirmwareListScreen() }
                 composable<ModelDetail> { entry ->
                     val key = entry.toRoute<ModelDetail>().key
                     ModelDetailScreen(

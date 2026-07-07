@@ -8,11 +8,15 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.somasafe.backend.data.DownloadState
+import app.somasafe.backend.data.RemoteFirmware
 import app.somasafe.backend.data.RemoteModel
 import app.somasafe.backend.data.WeightsStatus
+import app.somasafe.backend.data.downloadFirmware
 import app.somasafe.backend.data.downloadQuantized
 import app.somasafe.backend.data.downloadTrainable
+import app.somasafe.backend.data.fetchFirmwareVersions
 import app.somasafe.backend.data.fetchModels
+import app.somasafe.backend.data.listLocalFirmware
 import app.somasafe.backend.data.loadModelMeta
 import app.somasafe.backend.data.quantizedFile
 import app.somasafe.backend.data.submitOnly
@@ -29,21 +33,32 @@ sealed interface ModelListState {
     data class Error(val message: String) : ModelListState
 }
 
+sealed interface FirmwareListState {
+    data object Loading : FirmwareListState
+    data class Loaded(val versions: List<RemoteFirmware>) : FirmwareListState
+    data class Error(val message: String) : FirmwareListState
+}
+
 /**
- * Holds the Backend tab's model list and per-model download/upload state.
- * Scoped to the Backend destination's nav entry so the `/model/list` fetch runs
- * once per launch (retained across tab switches) rather than on every re-entry;
- * [refresh] reloads on demand. The list is intentionally left stale until
- * refreshed after new downloads land.
+ * Holds the Backend tab's model and firmware lists and their per-item
+ * download/upload state. Scoped to the Backend destination's nav entry so the
+ * list fetches run once per launch (retained across tab switches) rather than
+ * on every re-entry; [refresh] reloads on demand. The lists are intentionally
+ * left stale until refreshed after new downloads land.
  */
 class BackendModelsViewModel(app: Application) : AndroidViewModel(app) {
     private val context get() = getApplication<Application>()
 
     var listState by mutableStateOf<ModelListState>(ModelListState.Loading)
         private set
+    var firmwareListState by mutableStateOf<FirmwareListState>(FirmwareListState.Loading)
+        private set
+    var localFirmwareVersions by mutableStateOf<Set<String>>(emptySet())
+        private set
     var refreshing by mutableStateOf(false)
         private set
 
+    val firmwareDownloadStates = mutableStateMapOf<String, DownloadState>()
     val downloadStates = mutableStateMapOf<String, DownloadState>()
     val quantizedStates = mutableStateMapOf<String, DownloadState>()
     val uploadStates = mutableStateMapOf<String, DownloadState>()
@@ -58,6 +73,10 @@ class BackendModelsViewModel(app: Application) : AndroidViewModel(app) {
         weightsStatuses[key] = weightsStatus(context, key)
     }
 
+    private suspend fun refreshLocalFirmware() = withContext(Dispatchers.IO) {
+        localFirmwareVersions = listLocalFirmware(context).map { it.version }.toSet()
+    }
+
     fun refresh() {
         viewModelScope.launch {
             refreshing = true
@@ -67,7 +86,25 @@ class BackendModelsViewModel(app: Application) : AndroidViewModel(app) {
             )
             listState = result
             (result as? ModelListState.Loaded)?.models?.forEach { refreshLocal(it.key) }
+            firmwareListState = fetchFirmwareVersions(context).fold(
+                onSuccess = { FirmwareListState.Loaded(it) },
+                onFailure = { FirmwareListState.Error(it.message ?: "Unknown error") },
+            )
+            refreshLocalFirmware()
             refreshing = false
+        }
+    }
+
+    fun downloadFirmwareFor(firmware: RemoteFirmware) {
+        viewModelScope.launch {
+            firmwareDownloadStates[firmware.version] = DownloadState.InProgress
+            firmwareDownloadStates[firmware.version] = downloadFirmware(context, firmware).fold(
+                onSuccess = {
+                    refreshLocalFirmware()
+                    DownloadState.Done(firmware.version)
+                },
+                onFailure = { DownloadState.Error(it.message ?: "Unknown error") },
+            )
         }
     }
 
