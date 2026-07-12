@@ -5,7 +5,7 @@ import app.somasafe.backend.data.loadBaseWeights
 import app.somasafe.backend.data.loadModelMeta
 import app.somasafe.backend.data.loadTrainedWeights
 import app.somasafe.backend.data.saveTrainedWeights
-import app.somasafe.backend.data.trainableFile
+import app.somasafe.backend.data.readTrainableBytes
 import app.somasafe.capture.data.CaptureRepository
 import app.somasafe.capture.domain.leFloats
 import kotlinx.coroutines.Dispatchers
@@ -62,7 +62,7 @@ class Trainer(private val context: Context, private val repository: CaptureRepos
         }
 
         return withContext(Dispatchers.Default) {
-            LiteRtModel(trainableFile(context, modelKey).absolutePath).use { model ->
+            LiteRtModel(readTrainableBytes(context, modelKey)).use { model ->
                 val baseline = prevBase ?: model.saveWeights()
                 if (prevTrained != null) model.restoreWeights(prevTrained)
                 val result = runEpoch(model, windows)

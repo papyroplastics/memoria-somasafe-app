@@ -2,7 +2,7 @@ package app.somasafe.bluetooth.domain
 
 import android.content.Context
 import android.util.Log
-import app.somasafe.backend.data.trainableFile
+import app.somasafe.backend.data.readTrainableBytes
 import app.somasafe.bluetooth.data.BleConnection
 import app.somasafe.training.domain.LiteRtModel
 import app.somasafe.training.domain.TensorInfo
@@ -46,7 +46,7 @@ class ModelStaging(
                 // model for the tensor sizes.
                 val bytes = withContext(Dispatchers.IO) { buildModelPayload(context, key) }
                 val (featuresLen, scoreLen) =
-                    withContext(Dispatchers.Default) { introspect(trainableFile(context, key).absolutePath) }
+                    withContext(Dispatchers.Default) { introspect(readTrainableBytes(context, key)) }
 
                 val buffer = ClientBuffer(connection, SomaSafeUuids.ML_SVC)
                 buffer.start()
@@ -66,7 +66,7 @@ class ModelStaging(
         }
     }
 
-    private fun introspect(path: String): Pair<Int, Int> = LiteRtModel(path).use { model ->
+    private fun introspect(bytes: ByteArray): Pair<Int, Int> = LiteRtModel(bytes).use { model ->
         // The device echoes the raw feature vector + int8 score; the trainable model's
         // `eval` signature declares the same input/output shapes as the staged int8 model.
         val signature = model.describe().signatures.firstOrNull { it.key == "eval" }

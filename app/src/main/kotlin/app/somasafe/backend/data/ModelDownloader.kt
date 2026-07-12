@@ -3,11 +3,13 @@ package app.somasafe.backend.data
 import android.content.Context
 import app.somasafe.BuildConfig
 import app.somasafe.capture.domain.leBytes
+import com.github.luben.zstd.ZstdInputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -54,6 +56,20 @@ fun baseWeightsFile(context: Context, key: String): File = File(modelDir(context
 /** Absolute trained weights (`trained_weights.bin`), a raw LE float32 blob written
  *  only by on-device training; the upload delta is `trained − base`. */
 fun trainedWeightsFile(context: Context, key: String): File = File(modelDir(context, key), TRAINED_WEIGHTS_FILENAME)
+
+/** Downloaded artifacts are stored zstd-compressed exactly as the backend serves
+ *  them (signatures cover the raw bytes); consumers decompress through the readers
+ *  below rather than reading the files directly. */
+internal fun zstdDecompress(bytes: ByteArray): ByteArray =
+    ZstdInputStream(ByteArrayInputStream(bytes)).use { it.readBytes() }
+
+/** Raw trainable `.tflite` bytes, decompressed. The only way to read the model. */
+fun readTrainableBytes(context: Context, key: String): ByteArray =
+    zstdDecompress(trainableFile(context, key).readBytes())
+
+/** Raw quantized `.tflite` bytes, decompressed. The only way to read the model. */
+fun readQuantizedBytes(context: Context, key: String): ByteArray =
+    zstdDecompress(quantizedFile(context, key).readBytes())
 
 /** Whether this app satisfies a model's `min_app_version` (dot-separated numeric
  *  parts, missing parts count as 0 — so "1.0" satisfies "1.0.0"). */

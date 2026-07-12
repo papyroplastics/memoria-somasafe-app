@@ -2,9 +2,9 @@ package app.somasafe.training.domain
 
 import java.io.Closeable
 
-class LiteRtModel(modelPath: String) : Closeable {
+class LiteRtModel(modelBytes: ByteArray) : Closeable {
 
-    private val handle: Long = nativeCreate(modelPath)
+    private val handle: Long = nativeCreate(modelBytes)
 
     fun runEval(inputs: Array<FloatArray>): Array<FloatArray> = nativeRunEval(handle, inputs)
 
@@ -20,7 +20,7 @@ class LiteRtModel(modelPath: String) : Closeable {
 
     override fun close() = nativeDestroy(handle)
 
-    private external fun nativeCreate(modelPath: String): Long
+    private external fun nativeCreate(modelBytes: ByteArray): Long
     private external fun nativeDestroy(handle: Long)
     private external fun nativeRunEval(handle: Long, inputs: Array<FloatArray>): Array<FloatArray>
     private external fun nativeRunEvalQuantized(handle: Long, input: FloatArray): FloatArray

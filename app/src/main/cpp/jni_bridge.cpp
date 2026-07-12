@@ -3,6 +3,9 @@
 #include <vector>
 #include <android/log.h>
 
+#include <cstdint>
+
+#include <litert/cc/litert_buffer_ref.h>
 #include <litert/cc/litert_compiled_model.h>
 #include <litert/cc/litert_environment.h>
 
@@ -13,10 +16,12 @@
 #define LOG_TAG "SomaSafeML"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-// Owns both the environment and the compiled model. The environment must
-// outlive the model — storing them together in a single heap allocation
-// guarantees that ordering on destruction.
+// Owns the model bytes, the environment and the compiled model. The model is
+// built from a buffer view over `data`, so `data` must outlive the model; the
+// environment must too. Declaration order is destruction order reversed, so
+// listing them data → env → model destroys model first and data last.
 struct ModelHandle {
+    std::vector<uint8_t> data;
     litert::Environment env;
     litert::CompiledModel model;
 };
@@ -51,10 +56,10 @@ static bool unpack_float_arrays(
 extern "C" {
 
 JNIEXPORT jlong JNICALL
-Java_app_somasafe_training_domain_LiteRtModel_nativeCreate(JNIEnv* jni, jobject, jstring path) {
-    const char* cpath = jni->GetStringUTFChars(path, nullptr);
-    std::string model_path(cpath);
-    jni->ReleaseStringUTFChars(path, cpath);
+Java_app_somasafe_training_domain_LiteRtModel_nativeCreate(JNIEnv* jni, jobject, jbyteArray model_bytes) {
+    jsize len = jni->GetArrayLength(model_bytes);
+    std::vector<uint8_t> data(len);
+    jni->GetByteArrayRegion(model_bytes, 0, len, reinterpret_cast<jbyte*>(data.data()));
 
     auto env_result = litert::Environment::Create({});
     if (!env_result) {
@@ -62,14 +67,18 @@ Java_app_somasafe_training_domain_LiteRtModel_nativeCreate(JNIEnv* jni, jobject,
         return 0;
     }
 
+    // The buffer view aliases `data`; moving the vector into the handle below
+    // preserves its heap pointer, so the view stays valid for the model's life.
     auto model_result = litert::CompiledModel::Create(
-        *env_result, model_path, litert::HwAccelerators::kCpu);
+        *env_result, litert::BufferRef<uint8_t>(data.data(), data.size()),
+        litert::HwAccelerators::kCpu);
     if (!model_result) {
         throw_error(jni, "Failed to load model: " + model_result.Error().Message());
         return 0;
     }
 
-    auto* handle = new ModelHandle{std::move(*env_result), std::move(*model_result)};
+    auto* handle = new ModelHandle{
+        std::move(data), std::move(*env_result), std::move(*model_result)};
     return reinterpret_cast<jlong>(handle);
 }
 

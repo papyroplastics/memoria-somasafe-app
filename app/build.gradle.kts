@@ -133,6 +133,8 @@ dependencies {
 
     implementation(libs.protobuf.javalite)
 
+    implementation(libs.zstd.jni)
+
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation(libs.junit.jupiter.engine)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")

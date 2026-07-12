@@ -106,3 +106,8 @@ fun listLocalFirmware(context: Context): List<LocalFirmware> =
 fun deleteFirmware(context: Context, version: String) {
     firmwareVersionDir(context, version).deleteRecursively()
 }
+
+/** Raw firmware image bytes, decompressed. Stored zstd-compressed as served (the
+ *  signature covers the raw image); consumers stream it through here. */
+fun readFirmwareImage(firmware: LocalFirmware): ByteArray =
+    zstdDecompress(firmware.file.readBytes())

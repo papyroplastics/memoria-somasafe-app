@@ -2,7 +2,7 @@ package app.somasafe.bluetooth.domain
 
 import android.content.Context
 import app.somasafe.backend.data.loadSignedModelMeta
-import app.somasafe.backend.data.quantizedFile
+import app.somasafe.backend.data.readQuantizedBytes
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -17,7 +17,7 @@ import java.nio.ByteOrder
  * (`quantized.json`) to be stored locally.
  */
 fun buildModelPayload(context: Context, key: String): ByteArray {
-    val tflite = quantizedFile(context, key).readBytes()
+    val tflite = readQuantizedBytes(context, key)
     val meta = loadSignedModelMeta(context, key)
         ?: error("no signed metadata for '$key' — re-download the quantized model")
     val sig = meta.signature ?: error("quantized model for '$key' is unsigned")

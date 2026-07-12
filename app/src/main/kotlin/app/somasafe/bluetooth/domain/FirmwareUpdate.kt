@@ -3,6 +3,7 @@ package app.somasafe.bluetooth.domain
 import android.bluetooth.BluetoothGattCharacteristic
 import android.util.Log
 import app.somasafe.backend.data.LocalFirmware
+import app.somasafe.backend.data.readFirmwareImage
 import app.somasafe.bluetooth.data.BleConnection
 import app.somasafe.bluetooth.data.SomaSafeUuids
 import kotlinx.coroutines.CoroutineScope
@@ -72,7 +73,7 @@ class FirmwareUpdate(
 
             val deviceState = MutableStateFlow(OTA_STATE_IDLE)
             try {
-                val image = withContext(Dispatchers.IO) { firmware.file.readBytes() }
+                val image = withContext(Dispatchers.IO) { readFirmwareImage(firmware) }
                 _state.value = OtaState.Sending(0, image.size)
 
                 connection.enableNotifications(stateChr) { data ->

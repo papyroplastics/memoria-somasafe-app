@@ -15,6 +15,7 @@ security-crypto = "1.1.0-alpha06"
 jdsp = "3.0.0"
 protobuf = "3.25.5"
 protobufPlugin = "0.9.4"
+zstd-jni = "1.5.6-9"
 
 [libraries]
 guava = { module = "com.google.guava:guava", version.ref = "guava" }
@@ -37,6 +38,7 @@ room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 security-crypto = { module = "androidx.security:security-crypto", version.ref = "security-crypto" }
 jdsp = { module = "com.github.psambit9791:jdsp", version.ref = "jdsp" }
 protobuf-javalite = { module = "com.google.protobuf:protobuf-javalite", version.ref = "protobuf" }
+zstd-jni = { module = "com.github.luben:zstd-jni", version.ref = "zstd-jni" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

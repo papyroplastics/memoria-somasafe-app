@@ -38,6 +38,7 @@ import app.somasafe.backend.data.loadModelMeta
 import app.somasafe.backend.data.modelDir
 import app.somasafe.backend.data.quantStatus
 import app.somasafe.backend.data.submitOnly
+import app.somasafe.backend.data.readTrainableBytes
 import app.somasafe.backend.data.trainableFile
 import app.somasafe.backend.data.uploadAndQuantize
 import app.somasafe.backend.data.weightsStatus
@@ -82,7 +83,7 @@ fun ModelDetailScreen(modelKey: String, modifier: Modifier = Modifier,
         runCatching {
             withContext(Dispatchers.Default) {
                 storedMeta = withContext(Dispatchers.IO) { loadModelMeta(context, modelKey) }
-                LiteRtModel(modelFile.absolutePath).use { it.describe(modelKey) }
+                LiteRtModel(readTrainableBytes(context, modelKey)).use { it.describe(modelKey) }
             }
         }.fold(
             onSuccess = { modelInfo = it },
