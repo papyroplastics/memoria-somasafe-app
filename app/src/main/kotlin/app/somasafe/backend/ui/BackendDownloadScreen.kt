@@ -358,7 +358,10 @@ private fun ModelDownloadCard(
 
             if (localMeta != null) {
                 QuantizedRow(quantizedState, onDownloadQuantized)
-                UploadSection(uploadState, submitState, weightsStatus, onUploadQuantize, onSubmit)
+                UploadSection(
+                    uploadState, submitState, weightsStatus,
+                    model.supportsQuantizeSubmit, onUploadQuantize, onSubmit,
+                )
             }
         }
     }
@@ -398,6 +401,7 @@ private fun UploadSection(
     uploadState: DownloadState,
     submitState: DownloadState,
     weightsStatus: WeightsStatus,
+    supportsQuantizeSubmit: Boolean,
     onUploadQuantize: () -> Unit,
     onSubmit: () -> Unit,
 ) {
@@ -412,8 +416,12 @@ private fun UploadSection(
     val busy = uploadState is DownloadState.InProgress || submitState is DownloadState.InProgress
 
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = onUploadQuantize, enabled = enabled && !busy) {
-            Text("Upload & quantize")
+        // "Upload & quantize" only applies to quantize-type models; a raw model
+        // 404s on that endpoint, so only "Submit only" is offered for it.
+        if (supportsQuantizeSubmit) {
+            OutlinedButton(onClick = onUploadQuantize, enabled = enabled && !busy) {
+                Text("Upload & quantize")
+            }
         }
         OutlinedButton(onClick = onSubmit, enabled = enabled && !busy) {
             Text("Submit only")

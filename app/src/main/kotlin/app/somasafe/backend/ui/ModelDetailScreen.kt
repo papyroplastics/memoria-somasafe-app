@@ -57,8 +57,7 @@ private val KNOWN_ROLES: Map<String, String> = mapOf(
     "score"           to "anomaly score",
     "logit"           to "logit",
     "loss"            to "training loss",
-    "parameters"      to "model weights",
-    "parameter_count" to "parameter count",
+    "weights"         to "model weights",
 )
 
 // Tensor names are prefixed with their signature and suffixed with `:0` (e.g.
@@ -203,18 +202,22 @@ private fun ModelWeightsSection(modelKey: String, meta: RemoteModel?) {
             }
 
             // The federated upload paths, available once training produced weights.
+            // "Upload & quantize" only applies to quantize-type models; a raw model
+            // 404s on that endpoint, so only "Submit only" is offered for it.
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = {
-                        if (meta != null) run {
-                            uploadAndQuantize(context, meta).fold(
-                                onSuccess = { "Update uploaded; personalized quantized model stored" },
-                                onFailure = { "Upload failed: ${it.message}" },
-                            )
-                        }
-                    },
-                    enabled = !busy && meta != null && weights != WeightsStatus.MISSING,
-                ) { Text("Upload & quantize") }
+                if (meta?.supportsQuantizeSubmit == true) {
+                    OutlinedButton(
+                        onClick = {
+                            run {
+                                uploadAndQuantize(context, meta).fold(
+                                    onSuccess = { "Update uploaded; personalized quantized model stored" },
+                                    onFailure = { "Upload failed: ${it.message}" },
+                                )
+                            }
+                        },
+                        enabled = !busy && weights != WeightsStatus.MISSING,
+                    ) { Text("Upload & quantize") }
+                }
 
                 OutlinedButton(
                     onClick = {

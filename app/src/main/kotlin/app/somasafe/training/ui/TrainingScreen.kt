@@ -30,10 +30,11 @@ import app.somasafe.training.domain.Trainer
 
 /**
  * On-device training for one model: pick a processed capture group and run a local
- * epoch, writing the trained weights to `weights.json`. Requires the model to be
- * downloaded (the trainable artifact carries the global weights baked in). The model
- * z-scores its own inputs, so no normalization params are needed here. After training,
- * the model detail screen's upload actions submit the result as the federated update.
+ * epoch, writing the trained weights to `trained_weights.bin` (plus the starting
+ * baseline in `base_weights.bin`). Requires the model to be downloaded (the trainable
+ * artifact carries the global weights baked in). The model z-scores its own inputs, so
+ * no normalization params are needed here. After training, the model detail screen's
+ * upload actions submit the delta `trained − base` as the federated update.
  */
 @Composable
 fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {

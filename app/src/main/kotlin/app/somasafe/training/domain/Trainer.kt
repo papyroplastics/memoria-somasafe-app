@@ -1,10 +1,10 @@
 package app.somasafe.training.domain
 
 import android.content.Context
-import app.somasafe.backend.data.StoredWeights
+import app.somasafe.backend.data.loadBaseWeights
 import app.somasafe.backend.data.loadModelMeta
-import app.somasafe.backend.data.loadWeights
-import app.somasafe.backend.data.saveWeights
+import app.somasafe.backend.data.loadTrainedWeights
+import app.somasafe.backend.data.saveTrainedWeights
 import app.somasafe.backend.data.trainableFile
 import app.somasafe.capture.data.CaptureRepository
 import app.somasafe.capture.domain.leFloats
@@ -28,10 +28,12 @@ private fun sigParam(signature: String, param: String) = "${signature}_$param:0"
 
 /**
  * Runs one local training epoch of a model over a processed capture group and writes
- * the trained weights to `weights.json`, tagged with the base `weights_id` from
- * `meta.json` (so the upload flows submit them against the right snapshot). The first
- * epoch trains straight on the weights baked into the trainable model — the global
- * snapshot; later epochs restore the locally trained weights first.
+ * the absolute trained weights to `trained_weights.bin` and the global snapshot they
+ * derive from to `base_weights.bin` (the upload flows submit the delta `trained −
+ * base`, pinned to the base `weights_id` in `meta.json`). The first epoch trains
+ * straight on the weights baked into the trainable model — the global snapshot, also
+ * saved as the baseline; later epochs restore the locally trained weights and carry
+ * the original baseline forward.
  *
  * The autoencoder is self-supervised — its target is the input BVP — so only the model
  * inputs are assembled per window: a raw `[BVP, ACC]` signal frame and the 8-d
@@ -42,9 +44,9 @@ private fun sigParam(signature: String, param: String) = "${signature}_$param:0"
 class Trainer(private val context: Context, private val repository: CaptureRepository) {
 
     suspend fun trainEpoch(modelKey: String, groupId: Long): TrainResult {
-        val baseId = loadModelMeta(context, modelKey)?.weightsId
-            ?: error("model '$modelKey' not downloaded")
-        val weights = loadWeights(context, modelKey)
+        checkNotNull(loadModelMeta(context, modelKey)?.weightsId) { "model '$modelKey' not downloaded" }
+        val prevTrained = loadTrainedWeights(context, modelKey)
+        val prevBase = loadBaseWeights(context, modelKey)
         val static = repository.groupStatic(groupId)?.leFloats()
             ?: error("no demographics for group #$groupId; set the default demographics in the Captures tab")
         require(static.size == N_STATIC) { "expected $N_STATIC static values, got ${static.size}" }
@@ -61,9 +63,10 @@ class Trainer(private val context: Context, private val repository: CaptureRepos
 
         return withContext(Dispatchers.Default) {
             LiteRtModel(trainableFile(context, modelKey).absolutePath).use { model ->
-                if (weights != null) model.restoreWeights(weights.parameters)
+                val baseline = prevBase ?: model.saveWeights()
+                if (prevTrained != null) model.restoreWeights(prevTrained)
                 val result = runEpoch(model, windows)
-                saveWeights(context, modelKey, StoredWeights(model.saveWeights(), baseId))
+                saveTrainedWeights(context, modelKey, baseline, model.saveWeights())
                 result
             }
         }
