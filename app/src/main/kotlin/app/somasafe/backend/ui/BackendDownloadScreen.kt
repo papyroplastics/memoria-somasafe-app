@@ -286,11 +286,6 @@ private fun ModelDownloadCard(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(model.name, style = MaterialTheme.typography.titleMedium)
-            Text(
-                model.purpose,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
 
             if (!model.appCompatible) {
                 Text(

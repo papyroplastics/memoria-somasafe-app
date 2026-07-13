@@ -87,7 +87,6 @@ fun versionAtLeast(local: String, required: String): Boolean {
 data class RemoteModel(
     val key: String,
     val name: String,
-    val purpose: String,
     val firmwareId: Int?,
     val minAppVersion: String,
     val fingerprint: String,        // architecture identity (tripwire for the version)
@@ -112,7 +111,6 @@ data class RemoteModel(
     fun toJson(): JSONObject = JSONObject().apply {
         put("key", key)
         put("name", name)
-        put("purpose", purpose)
         if (firmwareId != null) put("firmware_id", firmwareId) else put("firmware_id", JSONObject.NULL)
         put("min_app_version", minAppVersion)
         put("fingerprint", fingerprint)
@@ -128,7 +126,6 @@ data class RemoteModel(
         fun fromJson(obj: JSONObject): RemoteModel = RemoteModel(
             key = obj.getString("key"),
             name = obj.getString("name"),
-            purpose = obj.getString("purpose"),
             firmwareId = if (obj.isNull("firmware_id")) null else obj.getInt("firmware_id"),
             minAppVersion = obj.getString("min_app_version"),
             fingerprint = obj.getString("fingerprint"),

@@ -50,21 +50,21 @@ import app.somasafe.training.domain.ModelInfo
 import app.somasafe.training.domain.QuantizationInfo
 import app.somasafe.training.domain.SignatureInfo
 import app.somasafe.training.domain.TensorInfo
+import app.somasafe.training.domain.paramName
 
+// Bare param names produced by the model's eval/train/save/restore signatures
+// (see backend/ml/models/feature_mlp.py, cnn_autoencoder.py and common.py).
 private val KNOWN_ROLES: Map<String, String> = mapOf(
-    "feature"         to "feature vector",
+    "features"        to "feature vector",
+    "labels"          to "labels",
+    "logits"          to "logit",
     "signal"          to "raw signal",
-    "label"           to "labels",
-    "score"           to "anomaly score",
-    "logit"           to "logit",
+    "cond"            to "condition vector",
+    "reconstruction"  to "reconstruction",
+    "error"           to "reconstruction error",
     "loss"            to "training loss",
     "weights"         to "model weights",
 )
-
-// Tensor names are prefixed with their signature and suffixed with `:0` (e.g.
-// `train_signal:0`); fall back to the bare param name so the base role still resolves.
-private fun TensorInfo.role(): String? =
-    KNOWN_ROLES[name] ?: KNOWN_ROLES[name.substringAfter('_', name).substringBefore(':')]
 
 @Composable
 fun ModelDetailScreen(modelKey: String, modifier: Modifier = Modifier,
@@ -274,11 +274,6 @@ private fun ModelMetaCard(meta: RemoteModel) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Text(
-                meta.purpose,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             if (meta.firmwareId != null) {
                 Text(
                     "Firmware: ≥ v${meta.firmwareId}",
@@ -319,7 +314,7 @@ private fun SignatureSection(sig: SignatureInfo) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
             )
-            sig.inputs.forEach { TensorCard(it) }
+            sig.inputs.forEach { TensorCard(it, sig.key) }
         }
 
         if (sig.outputs.isNotEmpty()) {
@@ -329,14 +324,15 @@ private fun SignatureSection(sig: SignatureInfo) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
             )
-            sig.outputs.forEach { TensorCard(it) }
+            sig.outputs.forEach { TensorCard(it, sig.key) }
         }
     }
 }
 
 @Composable
-private fun TensorCard(tensor: TensorInfo) {
-    val role = tensor.role()
+private fun TensorCard(tensor: TensorInfo, signature: String) {
+    val paramName = tensor.paramName(signature)
+    val role = KNOWN_ROLES[paramName]
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -346,7 +342,7 @@ private fun TensorCard(tensor: TensorInfo) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(tensor.name, style = MaterialTheme.typography.bodyMedium)
+                Text(paramName, style = MaterialTheme.typography.bodyMedium)
                 if (role != null) {
                     SuggestionChip(
                         onClick = {},

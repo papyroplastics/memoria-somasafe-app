@@ -44,10 +44,6 @@ Implemented now:
 - Device payload assembly: the app frames the signed quantized model (signature + contract version + norm params + tflite, per the BLE interface version — see `shared/docs/model-signing.md`) before staging it onto the ESP32.
 - Demographics: an editable form (Captures tab) sets the default static (6-d demographics) vector — the on-device stand-in for the DaLiA questionnaire. It is stamped onto each capture group as it is recorded, backfilled onto older groups that predate it when the form is saved, and returned as the fallback when a group has no static of its own; imported datasets instead carry their own subject's static (embedded by `export_subject_data.py`).
 
-Not implemented yet:
-
-- Upload retry strategy.
-
 ## Build
 
 - **minSdk**: 34
@@ -259,7 +255,7 @@ The **Process** action on a capture group (`capture/domain/CapturePipeline.kt`) 
 1. **Features** — the device may not return an ML result for every window (an error, or a dropped packet). For any complete window (raw PPG + ACC) without a feature vector, the app recomputes the same 17 features the firmware echoes (`WindowFeatures.kt`, matching `firmware/main/ml/features.c` / `extract_features`; JDSP supplies the FFT) and stores them **without a score** — running the model just to fill the score would waste computation.
 2. **Context** — each window's activity context (`WindowContext.kt`) is the mean/std of the raw ACC magnitude over the **prior** windows that ended within the trailing two minutes (by device time, `deviceStartMs`/`deviceEndMs`). A capture can be discontinuous, so this is lenient: it needs at least two-thirds of the expected ~15 context windows present (≥10), otherwise the window has too little context and is left without one (excluded from training).
 
-Both features and context are stored **un-normalized** and fed to the model raw; the model z-scores its own inputs in the `train`/`eval` signatures. This mirrors `backend/ml/data.py`, where features are stored raw and the activity context is computed from the raw signal, with normalization owned by the model rather than the load path.
+Both features and context are stored **un-normalized** and fed to the model raw; the model z-scores its own inputs in the `train`/`eval` signatures. This mirrors `backend/ml/preprocessing.py`, where features are stored raw and the activity context is computed from the raw signal, with normalization owned by the model rather than the load path.
 
 The `.ssds` import is a `somasafe.capture.CaptureDataset` protobuf (`shared/dataset.proto`, generated into the build dir by the protobuf Gradle plugin — see [Generated code](#generated-code)). Each window carries its sequence number, and — alongside any signal data — faked device timestamps (a contiguous 8 s grid from a random boot offset) and, when `export_subject_data.py --include-context` was used, its raw context. A window may legitimately arrive with signal but no features, features but no signal (no device timestamps, exactly like a result-only row), or be absent entirely (a gap in the sequence numbers). Because windows that carry signal have device timestamps just like ESP samples, **Process** computes context for them too (re-run only when context wasn't embedded); the receive time is stamped by the phone at import, back-dated per sequence step so dropped windows widen the gap.
 
@@ -269,7 +265,7 @@ Reached from a model's detail screen ("Train on capture…" → `TrainingScreen`
 
 1. Loads the trainable LiteRT model (its baked-in weights are the global snapshot) and, when a previous epoch left a `trained_weights.bin`, restores those on top.
 2. Reads the train signature via `describe()` for its batch size and input order.
-3. Assembles windows from a processed capture group — those with PPG + ACC + context. Per window it builds the raw `[BVP, ACC]` signal frame (ACC resampled 256→512, matching `backend/ml/data.py` `_interp_acc`) and the 8-d conditioning vector `[static(6), context(2)]`, both fed raw — the model z-scores them. The score/label is unused (the autoencoder is self-supervised). Windows are order-independent, so it trains whichever full batches of context-bearing windows exist and drops the remainder.
+3. Assembles windows from a processed capture group — those with PPG + ACC + context. Per window it builds the raw `[BVP, ACC]` signal frame (ACC resampled 256→512, matching `backend/ml/preprocessing.py` `_interp_acc`) and the 8-d conditioning vector `[static(6), context(2)]`, both fed raw — the model z-scores them. The score/label is unused (the autoencoder is self-supervised). Windows are order-independent, so it trains whichever full batches of context-bearing windows exist and drops the remainder.
 4. Writes the trained weights to `trained_weights.bin` and the starting global snapshot to `base_weights.bin`, which marks the quantized artifact outdated. The "Upload & quantize" / "Submit only" actions then submit the delta `trained − base` (pinned to the base `weights_id` from `meta.json`) — that submission is the federated update.
 
 It requires the model to be downloaded; `TrainingScreen` gates on that. The default static comes from the Demographics form; imported groups use their own.
