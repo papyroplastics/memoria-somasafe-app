@@ -6,21 +6,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * On-device preprocessing for a stored capture group, run on demand from the
- * Captures screen. Two passes over the group's windows:
+ * On-device preprocessing for a stored capture group, run on demand from the Captures
+ * screen: the device may not return an ML result for every window (an error, or a
+ * dropped packet), leaving raw sensor data but no [WindowFeatures]; compute and store
+ * them so every complete window carries a feature vector, score or not.
  *
- *  1. Features — windows the device never returned an ML result for (an error, or a
- *     dropped packet) have raw sensor data but no [WindowFeatures]; compute and store
- *     them so every complete window carries a feature vector, score or not.
- *  2. Context — compute each window's activity context ([WindowContext]) from the ACC
- *     of the prior windows in its trailing two minutes, storing it un-normalized.
- *     Windows with too little context are left without one.
- *
- * Idempotent: re-running only fills windows that are still missing a feature/context.
+ * Idempotent: re-running only fills windows that are still missing a feature vector.
  */
 class CapturePipeline(private val repository: CaptureRepository) {
 
-    data class Result(val featuresComputed: Int, val contextsComputed: Int)
+    data class Result(val featuresComputed: Int)
 
     suspend fun process(groupId: Long): Result = withContext(Dispatchers.Default) {
         val samples = repository.samplesForGroup(groupId)
@@ -37,27 +32,11 @@ class CapturePipeline(private val repository: CaptureRepository) {
             featuresComputed++
         }
 
-        val windows = samples.mapNotNull { s ->
-            val acc = s.acc ?: return@mapNotNull null
-            val start = s.deviceStartMs ?: return@mapNotNull null
-            val end = s.deviceEndMs ?: return@mapNotNull null
-            s to ContextWindow(start, end, acc.leFloats())
-        }
-        val all = windows.map { it.second }
-
-        var contextsComputed = 0
-        for ((sample, window) in windows) {
-            if (sample.context != null) continue
-            val context = WindowContext.contextFor(window, all) ?: continue
-            repository.storeContext(sample.id, context.leBytes())
-            contextsComputed++
-        }
-
-        Result(featuresComputed, contextsComputed)
+        Result(featuresComputed)
     }
 
     companion object {
-        private const val BVP_WINDOW = PpgService.PPG_PER_SEC * WindowContext.WINDOW_SECONDS  // 512
-        private const val ACC_WINDOW = PpgService.ACC_PER_SEC * WindowContext.WINDOW_SECONDS  // 256
+        private const val BVP_WINDOW = PpgService.PPG_PER_SEC * WindowFeatures.WINDOW_SECONDS  // 512
+        private const val ACC_WINDOW = PpgService.ACC_PER_SEC * WindowFeatures.WINDOW_SECONDS  // 256
     }
 }

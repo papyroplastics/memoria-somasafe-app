@@ -47,7 +47,6 @@ import app.somasafe.bluetooth.ui.FirmwareInstallScreen
 import app.somasafe.bluetooth.ui.LocalBluetoothSession
 import app.somasafe.bluetooth.ui.ProvideBluetoothSession
 import app.somasafe.capture.ui.CaptureScreen
-import app.somasafe.capture.ui.DemographicsScreen
 import app.somasafe.training.ui.TrainingScreen
 import kotlinx.serialization.Serializable
 import kotlin.reflect.KClass
@@ -61,7 +60,6 @@ import kotlin.reflect.KClass
 @Serializable private object DeviceDetail
 @Serializable private object FirmwareInstall
 @Serializable private object Captures
-@Serializable private object Demographics
 @Serializable private object BackendLogin
 @Serializable private object BackendHome
 @Serializable private object ModelList
@@ -77,7 +75,7 @@ private enum class AppTab(val title: String, val icon: ImageVector, val graph: A
 
 // Destinations that sit above a tab's root, so they show a back arrow.
 private val CHILD_ROUTES: List<KClass<*>> =
-    listOf(DeviceDetail::class, FirmwareInstall::class, Demographics::class, ModelList::class,
+    listOf(DeviceDetail::class, FirmwareInstall::class, ModelList::class,
         FirmwareList::class, ModelDetail::class, TrainingRoute::class)
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -181,10 +179,7 @@ fun MainScreen() = ProvideBluetoothSession {
             }
 
             navigation<CapturesTab>(startDestination = Captures) {
-                composable<Captures> {
-                    CaptureScreen(onOpenDemographics = { navController.navigate(Demographics) })
-                }
-                composable<Demographics> { DemographicsScreen() }
+                composable<Captures> { CaptureScreen() }
             }
 
             navigation<BackendTab>(startDestination = BackendLogin) {

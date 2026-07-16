@@ -59,7 +59,6 @@ private val KNOWN_ROLES: Map<String, String> = mapOf(
     "labels"          to "labels",
     "logits"          to "logit",
     "signal"          to "raw signal",
-    "cond"            to "condition vector",
     "reconstruction"  to "reconstruction",
     "error"           to "reconstruction error",
     "loss"            to "training loss",

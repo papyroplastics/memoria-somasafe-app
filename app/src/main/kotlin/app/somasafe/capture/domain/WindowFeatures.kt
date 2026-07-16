@@ -22,6 +22,7 @@ import kotlin.math.sqrt
  */
 object WindowFeatures {
     const val N_FEATURES = 17
+    const val WINDOW_SECONDS = 8
     private const val BVP_RATE = 64
     private const val HR_BAND_LO_BIN = 6   // first bin >= 0.7 Hz (0.75 Hz at 0.125 Hz/bin)
     private const val HR_BAND_HI_BIN = 28  // 3.50 Hz

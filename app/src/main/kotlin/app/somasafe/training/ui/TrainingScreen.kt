@@ -81,7 +81,7 @@ fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {
                         busy = true
                         status = runCatching { trainer.trainEpoch(modelKey, group.groupId) }.fold(
                             onSuccess = { r ->
-                                if (r.batches == 0) "No full batch of windows with context to train on"
+                                if (r.batches == 0) "No full batch of windows to train on"
                                 else "Trained ${r.windows} windows (${r.batches} batches), loss ${"%.4f".format(r.meanLoss)}"
                             },
                             onFailure = { "Training failed: ${it.message}" },
@@ -121,7 +121,7 @@ private fun GroupTrainCard(group: GroupSummary, enabled: Boolean, onTrain: () ->
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("Group #${group.groupId}", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "${group.sampleCount} samples · ${group.contextCount} with context",
+                    "${group.sampleCount} samples · ${group.signalCount} with signal",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

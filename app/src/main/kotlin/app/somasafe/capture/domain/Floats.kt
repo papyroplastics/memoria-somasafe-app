@@ -4,7 +4,7 @@ import java.nio.ByteOrder
 import java.nio.ByteBuffer
 
 /** Little-endian float32 <-> ByteArray, the on-disk layout the capture schema uses
- *  for ppg/acc/features/context. */
+ *  for ppg/acc/features. */
 
 internal fun ByteArray.leFloats(): FloatArray {
     val buf = ByteBuffer.wrap(this).order(ByteOrder.LITTLE_ENDIAN)

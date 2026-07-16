@@ -5,7 +5,6 @@ import android.util.Log
 import app.somasafe.backend.data.LocalFirmware
 import app.somasafe.bluetooth.data.BleConnection
 import app.somasafe.capture.data.CaptureRepository
-import app.somasafe.capture.data.loadDemographics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -79,8 +78,7 @@ class DeviceSession(
                 return@launch
             }
 
-            val static = loadDemographics(context)?.toBytes()
-            val groupId = repository.startGroup(System.currentTimeMillis(), static)
+            val groupId = repository.startGroup(System.currentTimeMillis())
             _capture.value = CaptureState.Running(groupId)
             _status.value = "Capturing…"
 

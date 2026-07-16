@@ -33,7 +33,6 @@ import java.util.Locale
 import app.somasafe.capture.data.CaptureRepository
 import app.somasafe.capture.data.DatasetImport
 import app.somasafe.capture.data.GroupSummary
-import app.somasafe.capture.data.loadDemographics
 import app.somasafe.capture.domain.CapturePipeline
 
 private val timeFormat = SimpleDateFormat("MMM d HH:mm:ss", Locale.getDefault())
@@ -44,7 +43,7 @@ private val timeFormat = SimpleDateFormat("MMM d HH:mm:ss", Locale.getDefault())
  * backend/scripts/export_subject_data.py. Independent of any BLE connection.
  */
 @Composable
-fun CaptureScreen(modifier: Modifier = Modifier, onOpenDemographics: () -> Unit = {}) {
+fun CaptureScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val repository = remember { CaptureRepository(context.applicationContext) }
@@ -65,7 +64,7 @@ fun CaptureScreen(modifier: Modifier = Modifier, onOpenDemographics: () -> Unit 
                         ?: error("could not open file")
                     DatasetImport.parse(bytes)
                 }
-                repository.importDataset(dataset, loadDemographics(context)?.toBytes())
+                repository.importDataset(dataset)
                 status = "Imported S${dataset.subject}: ${dataset.windows.size} windows"
             } catch (e: Exception) {
                 status = "Import failed: ${e.message}"
@@ -82,13 +81,8 @@ fun CaptureScreen(modifier: Modifier = Modifier, onOpenDemographics: () -> Unit 
     ) {
         Text("Captures", style = MaterialTheme.typography.headlineSmall)
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
-                Text("Import dataset…")
-            }
-            TextButton(onClick = onOpenDemographics) {
-                Text("Demographics")
-            }
+        Button(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
+            Text("Import dataset…")
         }
 
         status?.let {
@@ -110,8 +104,7 @@ fun CaptureScreen(modifier: Modifier = Modifier, onOpenDemographics: () -> Unit 
                         scope.launch {
                             try {
                                 val result = pipeline.process(group.groupId)
-                                status = "Group #${group.groupId}: +${result.featuresComputed} features, " +
-                                    "${result.contextsComputed} contexts"
+                                status = "Group #${group.groupId}: +${result.featuresComputed} features"
                             } catch (e: Exception) {
                                 status = "Processing failed: ${e.message}"
                             }
@@ -143,7 +136,7 @@ private fun GroupCard(group: GroupSummary, onProcess: () -> Unit, onDelete: () -
                 )
                 Text(
                     "${group.sampleCount} samples · ${group.resultCount} results · " +
-                        "${group.featureCount} features · ${group.contextCount} contexts",
+                        "${group.featureCount} features",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
