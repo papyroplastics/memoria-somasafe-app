@@ -34,6 +34,8 @@ import app.somasafe.backend.data.QuantStatus
 import app.somasafe.backend.data.RemoteModel
 import app.somasafe.backend.data.WeightsStatus
 import app.somasafe.backend.data.downloadQuantized
+import app.somasafe.backend.data.downloadWeights
+import app.somasafe.backend.data.fetchModels
 import app.somasafe.backend.data.loadModelMeta
 import app.somasafe.backend.data.modelDir
 import app.somasafe.backend.data.quantStatus
@@ -72,13 +74,18 @@ fun ModelDetailScreen(modelKey: String, modifier: Modifier = Modifier,
     val scope = rememberCoroutineScope()
     val modelFile = trainableFile(context, modelKey)
     var storedMeta by remember { mutableStateOf<RemoteModel?>(null) }
+    var upstreamMeta by remember { mutableStateOf<RemoteModel?>(null) }
     var modelInfo by remember { mutableStateOf<ModelInfo?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(modelKey) {
         storedMeta = null
+        upstreamMeta = null
         modelInfo = null
         error = null
+        withContext(Dispatchers.IO) {
+            upstreamMeta = fetchModels(context).getOrNull()?.find { it.key == modelKey }
+        }
         runCatching {
             withContext(Dispatchers.Default) {
                 storedMeta = withContext(Dispatchers.IO) { loadModelMeta(context, modelKey) }
@@ -105,7 +112,7 @@ fun ModelDetailScreen(modelKey: String, modifier: Modifier = Modifier,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        ModelWeightsSection(modelKey = modelKey, meta = storedMeta)
+        ModelWeightsSection(modelKey = modelKey, meta = storedMeta, upstream = upstreamMeta)
 
         Button(onClick = onOpenTraining, modifier = Modifier.fillMaxWidth()) {
             Text("Train on capture…")
@@ -157,7 +164,7 @@ fun ModelDetailScreen(modelKey: String, modifier: Modifier = Modifier,
 }
 
 @Composable
-private fun ModelWeightsSection(modelKey: String, meta: RemoteModel?) {
+private fun ModelWeightsSection(modelKey: String, meta: RemoteModel?, upstream: RemoteModel?) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -165,6 +172,13 @@ private fun ModelWeightsSection(modelKey: String, meta: RemoteModel?) {
     var quant by remember(modelKey) { mutableStateOf(QuantStatus.MISSING) }
     var busy by remember(modelKey) { mutableStateOf(false) }
     var message by remember(modelKey) { mutableStateOf<String?>(null) }
+
+    // The architecture is current when version + fingerprint match upstream; weight
+    // snapshots can roll back (a bad round gets invalidated), so their staleness is
+    // "different from upstream", never "older than upstream".
+    val architectureUpToDate = meta != null && upstream != null &&
+        meta.version == upstream.version && meta.fingerprint == upstream.fingerprint
+    val weightsUpToDate = meta != null && upstream != null && meta.weightsVersion == upstream.weightsVersion
 
     suspend fun refresh() = withContext(Dispatchers.IO) {
         weights = weightsStatus(context, modelKey)
@@ -187,6 +201,34 @@ private fun ModelWeightsSection(modelKey: String, meta: RemoteModel?) {
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            if (upstream != null && !architectureUpToDate) {
+                Text(
+                    "Model update available: v${upstream.version} · ${upstream.fingerprint.take(8)} " +
+                        "— re-download from the Backend tab.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            } else if (upstream != null && !weightsUpToDate) {
+                Text(
+                    "Newer weights available" + (upstream.weightsVersion?.let { "  ·  ${it.take(10)}" } ?: ""),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            if (meta != null) run {
+                                downloadWeights(context, meta).fold(
+                                    onSuccess = { "Weights refreshed" },
+                                    onFailure = { "Weights refresh failed: ${it.message}" },
+                                )
+                            }
+                        },
+                        enabled = !busy,
+                    ) { Text("Refresh weights") }
+                }
+            }
+
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = {

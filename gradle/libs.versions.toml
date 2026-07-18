@@ -38,7 +38,6 @@ room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 security-crypto = { module = "androidx.security:security-crypto", version.ref = "security-crypto" }
 jdsp = { module = "com.github.psambit9791:jdsp", version.ref = "jdsp" }
 protobuf-javalite = { module = "com.google.protobuf:protobuf-javalite", version.ref = "protobuf" }
-zstd-jni = { module = "com.github.luben:zstd-jni", version.ref = "zstd-jni" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

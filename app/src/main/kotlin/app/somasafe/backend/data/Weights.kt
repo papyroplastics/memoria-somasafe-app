@@ -15,7 +15,7 @@ enum class QuantStatus { MISSING, OUTDATED, CURRENT }
  * (the global snapshot baked into the trainable that training started from) and
  * `trained_weights.bin` (the absolute trained weights, kept so a later epoch can
  * resume from them). The federated update is the delta `trained − base`, computed at
- * upload time and never stored. The base snapshot's id lives in `meta.json`
+ * upload time and never stored. The base snapshot's id lives in `trainable.json`
  * (`weightsId`) and rides the submission URL.
  */
 fun saveTrainedWeights(context: Context, key: String, base: FloatArray, trained: FloatArray) {
@@ -54,10 +54,21 @@ fun weightsStatus(context: Context, key: String): WeightsStatus {
     }
 }
 
-/** Whether the quantized artifact is missing, present, or stale vs the trained weights. */
+/**
+ * Whether the quantized artifact is missing, present, or stale — either because
+ * a local retrain hasn't been re-quantized yet (trained weights newer than the
+ * quantized file), or because the trainable model's architecture has since moved
+ * past the version the quantized artifact was built for (`quantized.json`'s
+ * `modelVersion`, which only ever moves forward, unlike weight snapshots).
+ */
 fun quantStatus(context: Context, key: String): QuantStatus {
     val quantized = quantizedFile(context, key)
-    if (!quantized.exists() || loadSignedModelMeta(context, key) == null) return QuantStatus.MISSING
+    val meta = loadSignedModelMeta(context, key)
+    if (!quantized.exists() || meta == null) return QuantStatus.MISSING
+
+    val modelVersion = loadModelMeta(context, key)?.version
+    if (modelVersion != null && meta.modelVersion < modelVersion) return QuantStatus.OUTDATED
+
     val trained = trainedWeightsFile(context, key)
     return if (trained.exists() && trained.lastModified() > quantized.lastModified()) {
         QuantStatus.OUTDATED

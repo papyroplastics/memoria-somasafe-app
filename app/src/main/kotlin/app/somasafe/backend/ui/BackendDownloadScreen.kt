@@ -103,11 +103,13 @@ fun BackendDownloadScreen(
                             model = model,
                             localMeta = vm.localMetas[model.key],
                             state = vm.downloadStates[model.key] ?: DownloadState.Idle,
+                            weightsDownloadState = vm.weightsDownloadStates[model.key] ?: DownloadState.Idle,
                             quantizedState = vm.quantizedStates[model.key] ?: DownloadState.Idle,
                             uploadState = vm.uploadStates[model.key] ?: DownloadState.Idle,
                             submitState = vm.submitStates[model.key] ?: DownloadState.Idle,
                             weightsStatus = vm.weightsStatuses[model.key] ?: WeightsStatus.MISSING,
                             onDownload = { vm.download(model) },
+                            onDownloadWeights = { vm.downloadWeightsFor(model) },
                             onDownloadQuantized = { vm.downloadQuantizedFor(model) },
                             onUploadQuantize = { vm.uploadQuantize(model) },
                             onSubmit = { vm.submit(model) },
@@ -263,20 +265,26 @@ private fun ModelDownloadCard(
     model: RemoteModel,
     localMeta: RemoteModel?,
     state: DownloadState,
+    weightsDownloadState: DownloadState,
     quantizedState: DownloadState,
     uploadState: DownloadState,
     submitState: DownloadState,
     weightsStatus: WeightsStatus,
     onDownload: () -> Unit,
+    onDownloadWeights: () -> Unit,
     onDownloadQuantized: () -> Unit,
     onUploadQuantize: () -> Unit,
     onSubmit: () -> Unit,
 ) {
-    // Up to date only if the version (architecture) and the weights snapshot match upstream.
-    val isUpToDate = localMeta != null &&
+    // The architecture (graph) is current when the version and fingerprint match
+    // upstream; the full artifact only needs re-downloading in that case.
+    val architectureUpToDate = localMeta != null &&
         localMeta.version == model.version &&
-        localMeta.fingerprint == model.fingerprint &&
-        localMeta.weightsVersion == model.weightsVersion
+        localMeta.fingerprint == model.fingerprint
+
+    // Weight snapshots can roll back (a bad federated round gets invalidated), so
+    // staleness is "different from upstream", never "older than upstream".
+    val weightsUpToDate = localMeta != null && localMeta.weightsVersion == model.weightsVersion
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -304,13 +312,19 @@ private fun ModelDownloadCard(
                 )
             }
 
-            if (!isUpToDate) {
+            if (!architectureUpToDate) {
                 val upstream = buildString {
                     append("Upstream: v${model.version}  ·  ${model.fingerprint.take(8)}")
                     model.weightsVersion?.let { append("  ·  ${it.take(10)}") }
                 }
                 Text(
                     upstream,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            } else if (!weightsUpToDate) {
+                Text(
+                    "Newer weights available" + (model.weightsVersion?.let { "  ·  ${it.take(10)}" } ?: ""),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
                 )
@@ -336,7 +350,7 @@ private fun ModelDownloadCard(
                 }
 
                 else ->
-                    if (isUpToDate) {
+                    if (architectureUpToDate) {
                         Button(
                             onClick = onDownload,
                             colors = ButtonDefaults.buttonColors(
@@ -352,6 +366,7 @@ private fun ModelDownloadCard(
             }
 
             if (localMeta != null) {
+                WeightsRefreshRow(weightsDownloadState, weightsUpToDate, architectureUpToDate, onDownloadWeights)
                 QuantizedRow(quantizedState, onDownloadQuantized)
                 UploadSection(
                     uploadState, submitState, weightsStatus,
@@ -359,6 +374,42 @@ private fun ModelDownloadCard(
                 )
             }
         }
+    }
+}
+
+/**
+ * Lets the app pull just the active weight buffer instead of the whole
+ * trainable artifact — only meaningful once the architecture itself (version +
+ * fingerprint) already matches upstream; otherwise the full "Update" above is
+ * what's needed and this row stays hidden.
+ */
+@Composable
+private fun WeightsRefreshRow(state: DownloadState, weightsUpToDate: Boolean, architectureUpToDate: Boolean, onDownload: () -> Unit) {
+    if (!architectureUpToDate) return
+
+    when (state) {
+        DownloadState.InProgress ->
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                Text("Refreshing weights…", style = MaterialTheme.typography.bodyMedium)
+            }
+
+        is DownloadState.Error -> {
+            Text(
+                "Weights error: ${state.message}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            OutlinedButton(onClick = onDownload) { Text("Retry weights") }
+        }
+
+        else ->
+            if (!weightsUpToDate) {
+                OutlinedButton(onClick = onDownload) { Text("Refresh weights") }
+            }
     }
 }
 

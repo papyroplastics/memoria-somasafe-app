@@ -11,9 +11,11 @@ import app.somasafe.backend.data.DownloadState
 import app.somasafe.backend.data.RemoteFirmware
 import app.somasafe.backend.data.RemoteModel
 import app.somasafe.backend.data.WeightsStatus
+import app.somasafe.backend.data.baseWeightsFile
 import app.somasafe.backend.data.downloadFirmware
 import app.somasafe.backend.data.downloadQuantized
 import app.somasafe.backend.data.downloadTrainable
+import app.somasafe.backend.data.downloadWeights
 import app.somasafe.backend.data.fetchFirmwareVersions
 import app.somasafe.backend.data.fetchModels
 import app.somasafe.backend.data.listLocalFirmware
@@ -60,6 +62,7 @@ class BackendModelsViewModel(app: Application) : AndroidViewModel(app) {
 
     val firmwareDownloadStates = mutableStateMapOf<String, DownloadState>()
     val downloadStates = mutableStateMapOf<String, DownloadState>()
+    val weightsDownloadStates = mutableStateMapOf<String, DownloadState>()
     val quantizedStates = mutableStateMapOf<String, DownloadState>()
     val uploadStates = mutableStateMapOf<String, DownloadState>()
     val submitStates = mutableStateMapOf<String, DownloadState>()
@@ -115,6 +118,20 @@ class BackendModelsViewModel(app: Application) : AndroidViewModel(app) {
                 onSuccess = {
                     refreshLocal(model.key)
                     DownloadState.Done(trainableFile(context, model.key).absolutePath)
+                },
+                onFailure = { DownloadState.Error(it.message ?: "Unknown error") },
+            )
+        }
+    }
+
+    /** Refresh just the weight buffer for an already-downloaded architecture. */
+    fun downloadWeightsFor(model: RemoteModel) {
+        viewModelScope.launch {
+            weightsDownloadStates[model.key] = DownloadState.InProgress
+            weightsDownloadStates[model.key] = downloadWeights(context, model).fold(
+                onSuccess = {
+                    refreshLocal(model.key)
+                    DownloadState.Done(baseWeightsFile(context, model.key).absolutePath)
                 },
                 onFailure = { DownloadState.Error(it.message ?: "Unknown error") },
             )

@@ -27,7 +27,7 @@ private fun sigParam(signature: String, param: String) = "${signature}_$param:0"
  * Runs one local training epoch of a model over a processed capture group and writes
  * the absolute trained weights to `trained_weights.bin` and the global snapshot they
  * derive from to `base_weights.bin` (the upload flows submit the delta `trained −
- * base`, pinned to the base `weights_id` in `meta.json`). The first epoch trains
+ * base`, pinned to the base `weights_id` in `trainable.json`). The first epoch trains
  * straight on the weights baked into the trainable model — the global snapshot, also
  * saved as the baseline; later epochs restore the locally trained weights and carry
  * the original baseline forward.

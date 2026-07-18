@@ -147,11 +147,11 @@ Models are stored under `context.filesDir/models/`. Each model gets its own subd
 models/
   <key>/
     trainable.tflite     # trainable LiteRT flatbuffer with the global weights baked in, zstd-compressed (TRAINABLE_FILENAME)
+    trainable.json       # RemoteModel snapshot incl. the downloaded weights_id / weights_version (TRAINABLE_META_FILENAME)
     base_weights.bin     # global snapshot training started from, raw LE float32 (BASE_WEIGHTS_FILENAME)
     trained_weights.bin  # absolute trained weights, raw LE float32 (TRAINED_WEIGHTS_FILENAME)
     quantized.tflite     # int8 tflite downloaded or produced by the backend, zstd-compressed (QUANTIZED_FILENAME)
-    quantized.json       # signed fields delivered with it: signature, contract version, norm params (QUANTIZED_META_FILENAME)
-    meta.json            # RemoteModel snapshot incl. the downloaded weights_id / weights_version (META_FILENAME)
+    quantized.json       # signed fields delivered with it: signature, contract version, architecture version, norm params (QUANTIZED_META_FILENAME)
 ```
 
 The backend serves `trainable.tflite`, `quantized.tflite` and the firmware image
@@ -163,21 +163,46 @@ which zstd-decompress on load; the trainable model's raw bytes are handed to the
 LiteRT loader (`LiteRtModel(ByteArray)`), which builds the model from a buffer. The two
 `.bin` weight blobs are written locally by training and are not compressed.
 
-The file-name constants and all path helpers (`modelsDir`, `modelDir`, `metaFile`, `trainableFile`, `baseWeightsFile`, `trainedWeightsFile`, `quantizedFile`, `quantizedMetaFile`) live in `ModelDownloader.kt`. `ModelListScreen` lists the subdirectories that have a trainable model and shows whether a quantized variant exists and whether it is outdated relative to `trained_weights.bin`. `ModelDetailScreen` inspects the trainable model and exposes the download-quantized / upload actions; the same actions are available per-model on the Backend tab.
+The file-name constants and all path helpers (`modelsDir`, `modelDir`, `metaFile`, `trainableFile`, `baseWeightsFile`, `trainedWeightsFile`, `quantizedFile`, `quantizedMetaFile`) live in `ModelDownloader.kt`. `ModelListScreen` lists the subdirectories that have a trainable model and shows whether a quantized variant exists and whether it is outdated relative to `trained_weights.bin`. `ModelDetailScreen` inspects the trainable model and exposes the download-quantized / upload / weights-refresh actions; the same actions are available per-model on the Backend tab.
 
 Firmware images live alongside the models under `context.filesDir/firmware/<version>/`:
 `firmware.bin` (the app image, zstd-compressed as served; decompressed via
-`readFirmwareImage` before the OTA service streams it) plus `meta.json` (the
+`readFirmwareImage` before the OTA service streams it) plus `trainable.json` (the
 `RemoteFirmware` snapshot — interface version, supported contracts, release date — and the
 base64 `X-Firmware-Signature` the device verifies). Helpers (`firmwareDir`, `listLocalFirmware`,
 `downloadFirmware`, `deleteFirmware`, `readFirmwareImage`) live in `FirmwareDownloader.kt`; `FirmwareListScreen`
 manages the downloads and `FirmwareInstallScreen` (Bluetooth tab) installs them.
 
-### Weights ride the trainable artifact
+### Two weight-refresh paths
 
-The backend bakes the current global weights into every trainable `.tflite` it serves, so downloading the model *is* downloading the weights — there is no separate weights pull. `downloadTrainable` records the snapshot the artifact carries (the `X-Weights-ID` / `X-Weights-Timestamp` / `X-Model-Fingerprint` / `X-Model-Version` headers) in `meta.json`; when the version or fingerprint moved relative to what was stored, the local federated state (`base_weights.bin`, `trained_weights.bin`, quantized artifact) is deleted first, since it belongs to the superseded version.
+Picking up a new global snapshot goes through one of two routes, mirroring the
+backend's two download endpoints. `downloadTrainable` (`GET
+/model/download/trainable/<key>`) fetches the whole architecture with the current
+weights baked in — the only path that can move the *architecture* itself
+(`version`/`fingerprint`), so it always clears `base_weights.bin` and
+`trained_weights.bin`: whatever local training state existed was computed against
+the weights baked into the superseded `.tflite`, baseline included, and no longer
+applies. The quantized artifact is left on disk rather than deleted — it is merely
+flagged stale (see below), since it can still be a usable personalized artifact for
+the prior architecture. `downloadWeights` (`GET /model/weights/<key>`) is the
+lighter path for when only the weights moved: it pulls just the flat weight buffer,
+overwrites `base_weights.bin` with it, and drops `trained_weights.bin` (a local
+update trained against the old snapshot no longer applies) — the trainable
+`.tflite` itself is untouched. Both record the snapshot (the `X-Weights-ID` /
+`X-Weights-Timestamp` / `X-Model-Fingerprint` / `X-Model-Version` headers) in
+`trainable.json`, since the delta upload reads the base `weights_id` from there.
 
-The two `.bin` files hold only a **locally trained update**, written solely by on-device training as raw little-endian float32 blobs: `trained_weights.bin` (the absolute trained weights) and `base_weights.bin` (the global snapshot baked into the trainable that training started from). The submission body is the **delta** `trained − base` (see [federated uploads](#quantized-model-and-federated-uploads)), computed at upload time and never stored; the absolute weights are kept so a later epoch can resume from them, and the base so the delta stays correct even if the trainable is re-downloaded. The base snapshot's id is not stored with the weights — it is read from `meta.json` (`weights_id`) at upload time. `weightsStatus` (in `Weights.kt`) reports it `MISSING` (not trained yet — not an error), `OUTDATED` (the trainable file is newer than `trained_weights.bin`, i.e. it was re-downloaded after training, matching how `quantStatus` compares mtimes) or `CURRENT`. Whether the *model* is up to date is a separate check on the download screen: `meta.json`'s `version`/`fingerprint`/`weights_version` against the live `/model/list` entry.
+Both the download screen and `ModelDetailScreen` compare the locally stored
+`trainable.json` against the live `/model/list` entry to decide which path applies:
+`version`/`fingerprint` moved → "Update" (full `downloadTrainable`); only
+`weightsVersion` moved (architecture already current) → "Refresh weights"
+(`downloadWeights`). Weight staleness is always checked by **equality** against
+upstream, never by ordering — a federated round can be invalidated after the fact
+(see "Federated aggregation" in `backend/README.md`), rolling the *active*
+`weights_id`/`weights_version` backward, and the client must follow that rollback
+rather than treat an older-looking snapshot as already current.
+
+The two `.bin` files hold only a **locally trained update**, written solely by on-device training as raw little-endian float32 blobs: `trained_weights.bin` (the absolute trained weights) and `base_weights.bin` (the global snapshot training started from — baked into the trainable by `downloadTrainable`, or pulled solo by `downloadWeights`). The submission body is the **delta** `trained − base` (see [federated uploads](#quantized-model-and-federated-uploads)), computed at upload time and never stored; the absolute weights are kept so a later epoch can resume from them, and the base so the delta stays correct even after a weights refresh. The base snapshot's id is not stored with the weights — it is read from `trainable.json` (`weights_id`) at upload time. `weightsStatus` (in `Weights.kt`) reports it `MISSING` (not trained yet, or the weights were just refreshed — not an error), `OUTDATED` (the trainable file is newer than `trained_weights.bin`, i.e. it was re-downloaded after training, matching how `quantStatus` compares mtimes) or `CURRENT`. Whether the *model* is up to date is a separate check on the download screen: `trainable.json`'s `version`/`fingerprint`/`weights_version` against the live `/model/list` entry.
 
 ### Quantized model and federated uploads
 
@@ -191,7 +216,7 @@ Which paths a model accepts is set per model by its `submission_type` (from `/mo
 
 In both download paths the response body is the bare int8 `.tflite` and the signed fields travel in headers (`X-Model-Signature`, `X-Contract-Version`, `X-Norm-Params`, base64 where binary); they are stored as `quantized.tflite` + `quantized.json`. The app itself assembles the device payload from them at staging time (`bluetooth/domain/ModelPayload.kt`, per `shared/docs/model-signing.md`) — the server signature is transport-independent and verified by the firmware.
 
-Both the download screen and the model detail screen (both under the Backend tab) expose these actions ("Upload & quantize" only for `quantize`-type models); the upload buttons stay disabled until on-device training has produced `trained_weights.bin`. Weight handling lives in `backend/data` and has no dependency on the LiteRT code; `quantStatus` (also in `Weights.kt`) flags the quantized artifact as stale when `trained_weights.bin` is newer than it, and missing when the signed fields (`quantized.json`) are absent.
+Both the download screen and the model detail screen (both under the Backend tab) expose these actions ("Upload & quantize" only for `quantize`-type models); the upload buttons stay disabled until on-device training has produced `trained_weights.bin`. Weight handling lives in `backend/data` and has no dependency on the LiteRT code; `quantStatus` (also in `Weights.kt`) flags the quantized artifact as stale when `trained_weights.bin` is newer than it, *or* when its stored `quantized.json` architecture version (`modelVersion`) has fallen behind the locally downloaded trainable's version — a `downloadTrainable` update doesn't delete the quantized artifact, it just outdates it this way. `modelVersion` comes from the `X-Model-Version` header on a plain quantized download; the quantize-job poller passes it in explicitly since the job-result endpoint doesn't echo that header. `quantStatus` reads missing when the signed fields (`quantized.json`) are absent.
 
 ## Backend API (expected endpoints)
 
@@ -202,6 +227,7 @@ the caller to be a verified device owner ([`shared/docs/device-attestation.md`](
 |--------|------|----------|
 | GET | `/model/list` | JSON array of `RemoteModel` objects (latest version of each model) |
 | GET | `/model/download/trainable/<key>` | Trainable `.tflite` with the global weights baked in; `X-Model-Fingerprint` / `X-Model-Version` / `X-Weights-ID` / `X-Weights-Timestamp` headers |
+| GET | `/model/weights/<key>` | Just the active snapshot's flat LE float32 weight buffer (zstd-compressed), same version headers as the trainable download, on a separate download cooldown counter |
 | GET | `/model/download/quantized/<key>` | Global int8 `.tflite`; version headers plus the signed fields (`X-Model-Signature` / `X-Contract-Version` / `X-Norm-Params`) |
 | POST | `/model/submit/quantize/<key>/<weights_id>` | LE float32 weight-delta body → `202` `{"job_id"}` (federated update + quantize job; `quantize`-type models only, else `404`) |
 | GET | `/model/quantize/result/<job_id>` | Long-polls the job: `202` while pending/running (the request may block server-side up to ~30 s waiting on the task), `200` int8 `.tflite` + signed headers when done, `422` on failure |
@@ -209,7 +235,7 @@ the caller to be a verified device owner ([`shared/docs/device-attestation.md`](
 | GET | `/ota/versions/<interface>` | JSON array of firmware builds published for a BLE interface version, newest first |
 | GET | `/ota/download/<interface>/<version>` | Raw firmware image; the server's ECDSA over it in `X-Firmware-Signature` (base64), forwarded verbatim to the device's OTA service |
 
-`RemoteModel` JSON fields: `key`, `name`, `purpose`, `firmware_id` (int or null), `min_app_version`, `fingerprint`, `version` (int, hand-bumped server-side), `contract_version`, `weight_count`, `submission_type` (`"raw"` | `"quantize"` — which upload path the model accepts, per model rather than per deployment), `weights_version` (timestamp or null). A model is "up to date" locally when `version`, `fingerprint` and `weights_version` match upstream; a moved `version`/`fingerprint` invalidates the local federated state (the app resets it on the next download) — see [`shared/docs/versioning.md`](shared/docs/versioning.md) for what each of these means. Submitting against stale base weights — a superseded version, or an older weights snapshot of the current version — returns `409`; the delta is only accepted against the active weights the trainable was downloaded with, so the client must re-download the latest weights first. The app also checks `min_app_version` against its own version and disables incompatible models.
+`RemoteModel` JSON fields: `key`, `name`, `firmware_id` (int or null), `min_app_version`, `fingerprint`, `version` (int, hand-bumped server-side), `contract_version`, `weight_count`, `submission_type` (`"raw"` | `"quantize"` — which upload path the model accepts, per model rather than per deployment), `weights_version` (timestamp or null). A model is "up to date" locally when `version`, `fingerprint` and `weights_version` match upstream; a moved `version`/`fingerprint` invalidates the local federated state (the app resets it on the next download) — see [`shared/docs/versioning.md`](shared/docs/versioning.md) for what each of these means. Submitting against stale base weights — a superseded version, or an older weights snapshot of the current version — returns `409`; the delta is only accepted against the active weights the trainable was downloaded with, so the client must re-download the latest weights first. The app also checks `min_app_version` against its own version and disables incompatible models.
 
 `RemoteFirmware` JSON fields: `version` (arbitrary build string), `interface_version`,
 `supported_contracts` (int array — the model contract versions the build can run), `size`,
@@ -263,7 +289,7 @@ Reached from a model's detail screen ("Train on capture…" → `TrainingScreen`
 1. Loads the trainable LiteRT model (its baked-in weights are the global snapshot) and, when a previous epoch left a `trained_weights.bin`, restores those on top.
 2. Reads the train signature via `describe()` for its batch size. The signature takes a single input, `signal` (raw BVP, `[batch, 512, 1]`).
 3. Assembles windows from a capture group — those carrying a 512-sample PPG window. Each window's raw BVP is the whole model input, fed raw — the model z-scores it. The score/label is unused (the autoencoder is self-supervised), and so is ACC: the autoencoder does not take it as an input channel, and it reaches the models only through the 17-d feature vector. Windows are order-independent, so it trains whichever full batches exist and drops the remainder.
-4. Writes the trained weights to `trained_weights.bin` and the starting global snapshot to `base_weights.bin`, which marks the quantized artifact outdated. The "Upload & quantize" / "Submit only" actions then submit the delta `trained − base` (pinned to the base `weights_id` from `meta.json`) — that submission is the federated update.
+4. Writes the trained weights to `trained_weights.bin` and the starting global snapshot to `base_weights.bin`, which marks the quantized artifact outdated. The "Upload & quantize" / "Submit only" actions then submit the delta `trained − base` (pinned to the base `weights_id` from `trainable.json`) — that submission is the federated update.
 
 It requires the model to be downloaded; `TrainingScreen` gates on that.
 

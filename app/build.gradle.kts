@@ -133,7 +133,10 @@ dependencies {
 
     implementation(libs.protobuf.javalite)
 
-    implementation(libs.zstd.jni)
+    // zstd-jni's plain jar bundles desktop native libs keyed by "linux/aarch64" etc.,
+    // which collide with Android's ABI naming but are glibc builds that won't dlopen
+    // on Bionic; the @aar artifact ships the actual Android .so under jniLibs.
+    implementation("com.github.luben:zstd-jni:${libs.versions.zstd.jni.get()}@aar")
 
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation(libs.junit.jupiter.engine)
