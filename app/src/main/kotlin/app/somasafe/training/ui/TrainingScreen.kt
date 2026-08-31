@@ -5,12 +5,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -22,10 +26,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import app.somasafe.backend.data.loadModelMeta
 import app.somasafe.capture.data.CaptureRepository
 import app.somasafe.capture.data.GroupSummary
+import app.somasafe.training.domain.TrainMetrics
+import app.somasafe.training.domain.TrainPhase
+import app.somasafe.training.domain.TrainState
 import app.somasafe.training.domain.Trainer
 
 /**
@@ -46,11 +54,12 @@ fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {
 
     val groups by repository.groupSummaries().collectAsStateWithLifecycle(initialValue = emptyList())
     val meta = remember(modelKey) { loadModelMeta(context, modelKey) }
+    val state by trainer.state.collectAsStateWithLifecycle()
 
-    var busy by remember(modelKey) { mutableStateOf(false) }
-    var status by remember(modelKey) { mutableStateOf<String?>(null) }
+    var job by remember(modelKey) { mutableStateOf<Job?>(null) }
 
     val ready = meta?.weightsId != null
+    val busy = state is TrainState.Preparing || state is TrainState.Running
 
     Column(
         modifier = modifier
@@ -63,9 +72,7 @@ fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {
 
         PrereqCard(hasModel = ready)
 
-        status?.let {
-            Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.secondary)
-        }
+        TrainProgress(state, onCancel = { job?.cancel() })
 
         if (groups.isEmpty()) {
             Text(
@@ -77,23 +84,124 @@ fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {
             Text("Capture groups", style = MaterialTheme.typography.titleMedium)
             groups.forEach { group ->
                 GroupTrainCard(group, enabled = ready && !busy && group.hasNormParams) {
-                    status = "Training on group #${group.groupId}…"
-                    scope.launch {
-                        busy = true
-                        status = runCatching { trainer.trainEpoch(modelKey, group.groupId) }.fold(
-                            onSuccess = { r ->
-                                if (r.batches == 0) "No full batch of windows to train on"
-                                else "Trained ${r.windows} windows (${r.batches} batches), loss ${"%.4f".format(r.meanLoss)}"
-                            },
-                            onFailure = { "Training failed: ${it.message}" },
-                        )
-                        busy = false
-                    }
+                    job = scope.launch { runCatching { trainer.trainEpoch(modelKey, group.groupId) } }
                 }
             }
         }
     }
 }
+
+@Composable
+private fun TrainProgress(state: TrainState, onCancel: () -> Unit) {
+    when (state) {
+        TrainState.Idle -> {}
+
+        TrainState.Preparing ->
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                Text("Preparing windows…", style = MaterialTheme.typography.bodyMedium)
+            }
+
+        is TrainState.Running -> {
+            LinearProgressIndicator(
+                progress = { state.done.toFloat() / state.total },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    when (state.phase) {
+                        TrainPhase.SCORING_BASELINE -> "Scoring baseline…"
+                        TrainPhase.TRAINING -> "Training batch ${state.batch} / ${state.batches}"
+                        TrainPhase.SCORING_RESULT -> "Scoring result…"
+                        TrainPhase.SAVING -> "Saving weights…"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(onClick = onCancel) { Text("Cancel") }
+            }
+        }
+
+        is TrainState.Error ->
+            Text(
+                "Training failed: ${state.message}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+
+        is TrainState.Done -> MetricsCard(state.metrics)
+    }
+}
+
+@Composable
+private fun MetricsCard(metrics: TrainMetrics) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                "Trained in ${formatMs(metrics.totalMs)}",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            MetricRow(
+                "Reconstruction error",
+                "%.4f → %.4f  (%+.1f%%)".format(
+                    metrics.errorBefore, metrics.errorAfter, metrics.errorChange,
+                ),
+            )
+            MetricRow(
+                "Train loss",
+                "mean %.4f · last batch %.4f".format(metrics.meanLoss, metrics.lastLoss),
+            )
+            MetricRow(
+                "Windows",
+                "${metrics.batches * metrics.batchSize} trained in ${metrics.batches} batches of " +
+                    "${metrics.batchSize} · ${metrics.samples} samples, ${metrics.dropped} without " +
+                    "signal, ${metrics.remainder} left over",
+            )
+            MetricRow(
+                "Update",
+                "‖Δ‖ %.4f · max %.4f · %d weights".format(
+                    metrics.updateNorm, metrics.updateMaxAbs, metrics.weightCount,
+                ),
+            )
+            MetricRow(
+                "Timing",
+                "prepare ${formatMs(metrics.prepareMs)} · train ${formatMs(metrics.trainMs)} " +
+                    "(${metrics.msPerBatch} ms/batch) · scoring ${formatMs(metrics.scoreMs)} · " +
+                    "save ${formatMs(metrics.saveMs)}",
+            )
+            Text(
+                "Scored on ${metrics.scoredBatches} of the ${metrics.batches} batches, drawn at random",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MetricRow(label: String, value: String) {
+    Column {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(value, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+private fun formatMs(ms: Long): String =
+    if (ms < 1_000) "$ms ms" else "%.1f s".format(ms / 1_000f)
 
 @Composable
 private fun PrereqCard(hasModel: Boolean) {
