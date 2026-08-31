@@ -52,7 +52,6 @@ import app.somasafe.training.domain.ModelInfo
 import app.somasafe.training.domain.QuantizationInfo
 import app.somasafe.training.domain.SignatureInfo
 import app.somasafe.training.domain.TensorInfo
-import app.somasafe.training.domain.paramName
 
 // Bare param names produced by the model's eval/train/save/restore signatures
 // (see backend/ml/models/feature_mlp.py, cnn_autoencoder.py and common.py).
@@ -366,7 +365,7 @@ private fun SignatureSection(sig: SignatureInfo) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
             )
-            sig.inputs.forEach { TensorCard(it, sig.key) }
+            sig.inputs.forEach { TensorCard(it) }
         }
 
         if (sig.outputs.isNotEmpty()) {
@@ -376,14 +375,14 @@ private fun SignatureSection(sig: SignatureInfo) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
             )
-            sig.outputs.forEach { TensorCard(it, sig.key) }
+            sig.outputs.forEach { TensorCard(it) }
         }
     }
 }
 
 @Composable
-private fun TensorCard(tensor: TensorInfo, signature: String) {
-    val paramName = tensor.paramName(signature)
+private fun TensorCard(tensor: TensorInfo) {
+    val paramName = tensor.paramName
     val role = KNOWN_ROLES[paramName]
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(

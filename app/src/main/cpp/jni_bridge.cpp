@@ -240,6 +240,7 @@ static jobject build_tensor_info(JNIEnv* jni,
                                  jclass tensor_cls, jmethodID tensor_ctor,
                                  jclass quant_cls,  jmethodID quant_ctor,
                                  const TensorInfoData& t) {
+    jstring     param     = jni->NewStringUTF(t.param_name.c_str());
     jstring     name      = jni->NewStringUTF(t.name.c_str());
     jstring     etype     = jni->NewStringUTF(t.element_type.c_str());
     jintArray   shape_arr = jni->NewIntArray((jsize)t.shape.size());
@@ -249,8 +250,9 @@ static jobject build_tensor_info(JNIEnv* jni,
 
     jobject quant = build_quant_info(jni, quant_cls, quant_ctor, t.quantization);
     jobject obj   = jni->NewObject(tensor_cls, tensor_ctor,
-        name, etype, (jboolean)t.is_ranked, shape_arr, quant);
+        param, name, etype, (jboolean)t.is_ranked, shape_arr, quant);
 
+    jni->DeleteLocalRef(param);
     jni->DeleteLocalRef(name);
     jni->DeleteLocalRef(etype);
     jni->DeleteLocalRef(shape_arr);
@@ -282,7 +284,8 @@ Java_app_somasafe_training_domain_LiteRtModel_nativeDescribe(JNIEnv* jni, jobjec
 
     jmethodID quant_ctor  = jni->GetMethodID(quant_cls,  "<init>", "(Ljava/lang/String;FII[F[I)V");
     jmethodID tensor_ctor = jni->GetMethodID(tensor_cls, "<init>",
-        "(Ljava/lang/String;Ljava/lang/String;Z[ILapp/somasafe/training/domain/QuantizationInfo;)V");
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z[I"
+        "Lapp/somasafe/training/domain/QuantizationInfo;)V");
     jmethodID sig_ctor    = jni->GetMethodID(sig_cls,    "<init>",
         "(Ljava/lang/String;Ljava/util/List;Ljava/util/List;)V");
     jmethodID model_ctor  = jni->GetMethodID(model_cls,  "<init>",

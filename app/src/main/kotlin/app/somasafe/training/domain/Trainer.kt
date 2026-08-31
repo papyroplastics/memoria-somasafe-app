@@ -70,11 +70,6 @@ private const val SIGNAL_INPUT = "signal"
 private const val ERROR_OUTPUT = "error"
 private const val SCORE_BATCHES = 20
 
-/** A signature's input/output tensors are exposed prefixed with the signature name and
- *  suffixed with a `:0` output index (unique since the models have no name collisions),
- *  e.g. the `train` signature's `signal` input is the tensor `train_signal:0`. */
-private fun sigParam(signature: String, param: String) = "${signature}_$param:0"
-
 /**
  * Runs one local training epoch of a model over a processed capture group and writes
  * the absolute trained weights to `trained_weights.bin` and the global snapshot they
@@ -214,14 +209,12 @@ class Trainer(private val context: Context, private val repository: CaptureRepos
     private fun meanError(model: LiteRtModel, errorIndex: Int, input: FloatArray): Float =
         model.runEval(arrayOf(input))[errorIndex].average().toFloat()
 
-    /** Batch size the train signature declares. Its sole input is the signal tensor,
-     *  named after the signature (`train_signal`). */
+    /** Batch size the train signature declares. Its sole input is the signal tensor. */
     private fun trainBatchSize(info: ModelInfo): Int {
         val sig = info.signatures.firstOrNull { it.key == TRAIN_SIGNATURE }
             ?: error("model has no '$TRAIN_SIGNATURE' signature")
-        val signalName = sigParam(TRAIN_SIGNATURE, SIGNAL_INPUT)
-        val signal = sig.inputs.singleOrNull()?.takeIf { it.name == signalName }
-            ?: error("train signature must take exactly one '$signalName' input")
+        val signal = sig.inputs.singleOrNull()?.takeIf { it.paramName == SIGNAL_INPUT }
+            ?: error("train signature must take exactly one '$SIGNAL_INPUT' input")
         val batch = signal.shape.firstOrNull() ?: -1
         require(batch > 0) { "train signature has a non-fixed batch size" }
         return batch
@@ -230,7 +223,7 @@ class Trainer(private val context: Context, private val repository: CaptureRepos
     private fun evalErrorIndex(info: ModelInfo): Int {
         val sig = info.signatures.firstOrNull { it.key == EVAL_SIGNATURE }
             ?: error("model has no '$EVAL_SIGNATURE' signature")
-        val index = sig.outputs.indexOfFirst { it.paramName(EVAL_SIGNATURE) == ERROR_OUTPUT }
+        val index = sig.outputs.indexOfFirst { it.paramName == ERROR_OUTPUT }
         require(index >= 0) { "eval signature has no '$ERROR_OUTPUT' output" }
         return index
     }
