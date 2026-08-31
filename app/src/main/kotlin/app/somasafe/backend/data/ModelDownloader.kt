@@ -29,7 +29,12 @@ const val WEIGHTS_ID_HEADER = "X-Weights-ID"
 const val WEIGHTS_TIMESTAMP_HEADER = "X-Weights-Timestamp"
 const val SIGNATURE_HEADER = "X-Model-Signature"
 const val CONTRACT_VERSION_HEADER = "X-Contract-Version"
-const val NORM_PARAMS_HEADER = "X-Norm-Params"
+
+/** Submission types a model version can carry (`submission_type` in /model/list); see
+ *  shared/docs/submission-type.md. The app implements the two dense-delta paths. */
+const val RAW_SUBMISSION = "raw"
+const val QUANTIZE_SUBMISSION = "quantize"
+const val SECURE_SUBMISSION = "secure"
 
 fun modelsDir(context: Context): File = File(context.filesDir, "models")
 
@@ -45,8 +50,8 @@ fun trainableFile(context: Context, key: String): File = File(modelDir(context, 
 fun quantizedFile(context: Context, key: String): File = File(modelDir(context, key), QUANTIZED_FILENAME)
 
 /** Signed fields delivered alongside the quantized model (`quantized.json`): the
- *  contract version, the norm params, and the server's ECDSA signature over the
- *  canonical bytes. Needed to assemble the device payload. */
+ *  contract version and the server's ECDSA signature over the canonical bytes.
+ *  Needed to assemble the device payload. */
 fun quantizedMetaFile(context: Context, key: String): File = File(modelDir(context, key), QUANTIZED_META_FILENAME)
 
 /** Baseline weights (`base_weights.bin`): the global snapshot on-device training
@@ -93,7 +98,7 @@ data class RemoteModel(
     val version: Int,               // hand-bumped model version; a move invalidates local state
     val contractVersion: Int,       // how the model is fed (norm-param layout + I/O signatures)
     val weightCount: Int,
-    val submissionType: String,     // "raw" | "quantize": which upload path this model accepts
+    val submissionType: String,     // which upload path this model accepts (see *_SUBMISSION)
     val weightsVersion: String?,    // timestamp of the latest global weights (null if none)
     val weightsId: Long? = null,    // base snapshot id; set from headers when the trainable is downloaded
 ) {
@@ -107,7 +112,13 @@ data class RemoteModel(
     val appCompatible: Boolean get() = versionAtLeast(BuildConfig.VERSION_NAME, minAppVersion)
 
     /** Whether the quantize upload path applies; a `raw` model 404s on it. */
-    val supportsQuantizeSubmit: Boolean get() = submissionType == "quantize"
+    val supportsQuantizeSubmit: Boolean get() = submissionType == QUANTIZE_SUBMISSION
+
+    /** Whether the submit-only path applies. It takes the same dense delta body for both
+     *  `raw` and `quantize`; a `secure` model submits masked vectors through the sealed-round
+     *  endpoints instead, which the app has no client for. */
+    val supportsRawSubmit: Boolean
+        get() = submissionType == RAW_SUBMISSION || submissionType == QUANTIZE_SUBMISSION
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("key", key)
@@ -157,13 +168,11 @@ fun loadModelMeta(context: Context, key: String): RemoteModel? =
 data class SignedModelMeta(
     val contractVersion: Int,
     val modelVersion: Int,
-    val normParams: ByteArray,
     val signature: ByteArray?,
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("contract_version", contractVersion)
         put("model_version", modelVersion)
-        put("norm_params", Base64.getEncoder().encodeToString(normParams))
         if (signature != null) put("signature", Base64.getEncoder().encodeToString(signature))
         else put("signature", JSONObject.NULL)
     }
@@ -172,7 +181,6 @@ data class SignedModelMeta(
         fun fromJson(o: JSONObject): SignedModelMeta = SignedModelMeta(
             contractVersion = o.getInt("contract_version"),
             modelVersion = o.getInt("model_version"),
-            normParams = Base64.getDecoder().decode(o.getString("norm_params")),
             signature = if (o.isNull("signature")) null else Base64.getDecoder().decode(o.getString("signature")),
         )
 
@@ -180,8 +188,6 @@ data class SignedModelMeta(
             contractVersion = connection.getHeaderField(CONTRACT_VERSION_HEADER)?.toInt()
                 ?: error("missing $CONTRACT_VERSION_HEADER header"),
             modelVersion = connection.getHeaderField(MODEL_VERSION_HEADER)?.toInt() ?: fallbackVersion,
-            normParams = Base64.getDecoder().decode(
-                connection.getHeaderField(NORM_PARAMS_HEADER) ?: error("missing $NORM_PARAMS_HEADER header")),
             signature = connection.getHeaderField(SIGNATURE_HEADER)?.let { Base64.getDecoder().decode(it) },
         )
     }

@@ -34,7 +34,7 @@ class DeviceSession(
 ) {
     private val repository = CaptureRepository(context)
     private val attestation = Attestation(context, connection, scope)
-    private val staging = ModelStaging(context, connection, scope)
+    private val staging = ModelStaging(context, connection, repository, scope)
     private val firmware = FirmwareUpdate(connection, scope)
 
     val model = staging.model

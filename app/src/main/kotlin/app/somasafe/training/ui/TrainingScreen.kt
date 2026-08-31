@@ -32,9 +32,10 @@ import app.somasafe.training.domain.Trainer
  * On-device training for one model: pick a processed capture group and run a local
  * epoch, writing the trained weights to `trained_weights.bin` (plus the starting
  * baseline in `base_weights.bin`). Requires the model to be downloaded (the trainable
- * artifact carries the global weights baked in). The model z-scores its own inputs, so
- * no normalization params are needed here. After training, the model detail screen's
- * upload actions submit the delta `trained − base` as the federated update.
+ * artifact carries the global weights baked in) and the capture group to have been
+ * processed, since the windows are z-scored with the parameters preprocessing derived
+ * from that group. After training, the model detail screen's upload actions submit the
+ * delta `trained − base` as the federated update.
  */
 @Composable
 fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {
@@ -75,7 +76,7 @@ fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {
         } else {
             Text("Capture groups", style = MaterialTheme.typography.titleMedium)
             groups.forEach { group ->
-                GroupTrainCard(group, enabled = ready && !busy) {
+                GroupTrainCard(group, enabled = ready && !busy && group.hasNormParams) {
                     status = "Training on group #${group.groupId}…"
                     scope.launch {
                         busy = true
@@ -125,6 +126,13 @@ private fun GroupTrainCard(group: GroupSummary, enabled: Boolean, onTrain: () ->
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (!group.hasNormParams) {
+                    Text(
+                        "Not processed — no normalization parameters",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
             Button(onClick = onTrain, enabled = enabled) { Text("Train") }
         }

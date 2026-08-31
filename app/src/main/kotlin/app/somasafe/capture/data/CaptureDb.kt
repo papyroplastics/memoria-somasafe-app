@@ -21,12 +21,21 @@ import kotlinx.coroutines.flow.Flow
  * A capture group: the set of samples collected between one Start and Stop
  * press. Samples may be lost mid-group; what matters is that they were received
  * together, regardless of their (non-contiguous) sequence numbers.
+ *
+ * Preprocessing also derives the wearer's z-score parameters from the group's own
+ * windows and stores them here; [pickedAt] marks the group whose parameters get
+ * staged with a model.
  */
 @Entity(tableName = "sample_groups")
 data class SampleGroup(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val startedAt: Long,          // epoch millis when capture started
-    val endedAt: Long? = null,    // epoch millis when capture stopped
+    val startedAt: Long,             // epoch millis when capture started
+    val endedAt: Long? = null,       // epoch millis when capture stopped
+    val featureMean: ByteArray? = null,  // LE float32, one per feature
+    val featureStd: ByteArray? = null,
+    val signalMean: ByteArray? = null,   // LE float32, one value for the whole BVP stream
+    val signalStd: ByteArray? = null,
+    val pickedAt: Long? = null,      // epoch millis this group was picked for staging
 )
 
 /**
@@ -70,6 +79,8 @@ data class GroupSummary(
     @ColumnInfo(name = "resultCount") val resultCount: Int,
     @ColumnInfo(name = "featureCount") val featureCount: Int,
     @ColumnInfo(name = "signalCount") val signalCount: Int,
+    @ColumnInfo(name = "hasNormParams") val hasNormParams: Boolean,
+    @ColumnInfo(name = "picked") val picked: Boolean,
 )
 
 @Dao
@@ -79,6 +90,45 @@ interface CaptureDao {
 
     @Query("UPDATE sample_groups SET endedAt = :endedAt WHERE id = :groupId")
     suspend fun endGroup(groupId: Long, endedAt: Long)
+
+    @Query("SELECT * FROM sample_groups WHERE id = :groupId")
+    suspend fun group(groupId: Long): SampleGroup?
+
+    @Query(
+        """
+        UPDATE sample_groups
+        SET featureMean = :featureMean, featureStd = :featureStd,
+            signalMean = :signalMean, signalStd = :signalStd
+        WHERE id = :groupId
+        """
+    )
+    suspend fun setNormParams(groupId: Long, featureMean: ByteArray?, featureStd: ByteArray?,
+                              signalMean: ByteArray?, signalStd: ByteArray?)
+
+    @Query("UPDATE sample_groups SET pickedAt = NULL")
+    suspend fun clearPicked()
+
+    @Query("UPDATE sample_groups SET pickedAt = :at WHERE id = :groupId")
+    suspend fun markPicked(groupId: Long, at: Long)
+
+    /** Only one group is ever picked, so picking one clears the rest. */
+    @Transaction
+    suspend fun pickGroup(groupId: Long, at: Long) {
+        clearPicked()
+        markPicked(groupId, at)
+    }
+
+    /** The group a model stages its norm params from: the picked one, else the most
+     *  recently started group that has been preprocessed. */
+    @Query(
+        """
+        SELECT * FROM sample_groups
+        WHERE featureMean IS NOT NULL AND featureStd IS NOT NULL
+        ORDER BY pickedAt IS NULL, startedAt DESC
+        LIMIT 1
+        """
+    )
+    suspend fun stagingGroup(): SampleGroup?
 
     @Query("SELECT * FROM samples WHERE groupId = :groupId AND sequenceN = :sequenceN LIMIT 1")
     suspend fun findSample(groupId: Long, sequenceN: Long): Sample?
@@ -117,7 +167,9 @@ interface CaptureDao {
                COUNT(s.id) AS sampleCount,
                SUM(CASE WHEN s.score IS NOT NULL THEN 1 ELSE 0 END) AS resultCount,
                SUM(CASE WHEN s.features IS NOT NULL THEN 1 ELSE 0 END) AS featureCount,
-               SUM(CASE WHEN s.ppg IS NOT NULL THEN 1 ELSE 0 END) AS signalCount
+               SUM(CASE WHEN s.ppg IS NOT NULL THEN 1 ELSE 0 END) AS signalCount,
+               g.featureMean IS NOT NULL AS hasNormParams,
+               g.pickedAt IS NOT NULL AS picked
         FROM sample_groups g
         LEFT JOIN samples s ON s.groupId = g.id
         GROUP BY g.id
@@ -127,7 +179,7 @@ interface CaptureDao {
     fun groupSummaries(): Flow<List<GroupSummary>>
 }
 
-@Database(entities = [SampleGroup::class, Sample::class], version = 3, exportSchema = true)
+@Database(entities = [SampleGroup::class, Sample::class], version = 4, exportSchema = true)
 abstract class CaptureDatabase : RoomDatabase() {
     abstract fun captureDao(): CaptureDao
 

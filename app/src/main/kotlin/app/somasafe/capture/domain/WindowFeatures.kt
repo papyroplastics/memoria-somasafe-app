@@ -7,7 +7,7 @@ import kotlin.math.cos
 import kotlin.math.sqrt
 
 /**
- * On-device replica of `extract_features` (backend/ml/data.py) and
+ * On-device replica of `extract_features` (backend/ml/preprocessing.py) and
  * `ml_extract_features` (firmware/main/ml/features.c): the 17 raw (un-normalized)
  * features from one 8-second window — BVP (512 samples @ 64 Hz) and ACC (256
  * samples @ 32 Hz). Feature order:

@@ -60,7 +60,7 @@ private val KNOWN_ROLES: Map<String, String> = mapOf(
     "features"        to "feature vector",
     "labels"          to "labels",
     "logits"          to "logit",
-    "signal"          to "raw signal",
+    "signal"          to "signal window",
     "reconstruction"  to "reconstruction",
     "error"           to "reconstruction error",
     "loss"            to "training loss",
@@ -245,7 +245,8 @@ private fun ModelWeightsSection(modelKey: String, meta: RemoteModel?, upstream: 
 
             // The federated upload paths, available once training produced weights.
             // "Upload & quantize" only applies to quantize-type models; a raw model
-            // 404s on that endpoint, so only "Submit only" is offered for it.
+            // 404s on that endpoint, so only "Submit only" is offered for it, and a
+            // secure-aggregation model gets neither (no client for its sealed rounds).
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (meta?.supportsQuantizeSubmit == true) {
                     OutlinedButton(
@@ -261,17 +262,27 @@ private fun ModelWeightsSection(modelKey: String, meta: RemoteModel?, upstream: 
                     ) { Text("Upload & quantize") }
                 }
 
-                OutlinedButton(
-                    onClick = {
-                        if (meta != null) run {
-                            submitOnly(context, meta).fold(
-                                onSuccess = { "Update submitted (#$it)" },
-                                onFailure = { "Submit failed: ${it.message}" },
-                            )
-                        }
-                    },
-                    enabled = !busy && meta != null && weights != WeightsStatus.MISSING,
-                ) { Text("Submit only") }
+                if (meta?.supportsRawSubmit != false) {
+                    OutlinedButton(
+                        onClick = {
+                            if (meta != null) run {
+                                submitOnly(context, meta).fold(
+                                    onSuccess = { "Update submitted (#$it)" },
+                                    onFailure = { "Submit failed: ${it.message}" },
+                                )
+                            }
+                        },
+                        enabled = !busy && meta != null && weights != WeightsStatus.MISSING,
+                    ) { Text("Submit only") }
+                }
+            }
+
+            if (meta != null && !meta.supportsQuantizeSubmit && !meta.supportsRawSubmit) {
+                Text(
+                    "Secure-aggregation model — the app has no client for its sealed rounds.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             val weightsText = when (weights) {

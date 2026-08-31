@@ -24,7 +24,7 @@ data class ImportedDataset(
 )
 
 /**
- * Parses the `.ssds` subject export written by backend/scripts/export_subject_data.py,
+ * Parses the `.ssds` subject export written by backend/scripts/system/export_subject_data.py,
  * a `somasafe.capture.CaptureDataset` protobuf (schema in shared/dataset.proto).
  *
  * Each window carries the recording-intrinsic metadata an ESP sample has (sequence

@@ -11,28 +11,50 @@ import kotlinx.coroutines.withContext
  * dropped packet), leaving raw sensor data but no [WindowFeatures]; compute and store
  * them so every complete window carries a feature vector, score or not.
  *
- * Idempotent: re-running only fills windows that are still missing a feature vector.
+ * The same pass derives the wearer's z-score parameters from the group's own windows —
+ * per-feature over every raw feature vector, and one pair over the raw BVP stream — since
+ * no model normalizes its own input: the app supplies the parameters when it stages a
+ * model on the device, and applies them itself when it trains.
+ *
+ * Idempotent: re-running only fills windows that are still missing a feature vector, and
+ * recomputes the group's parameters over whatever it holds.
  */
 class CapturePipeline(private val repository: CaptureRepository) {
 
-    data class Result(val featuresComputed: Int)
+    data class Result(val featuresComputed: Int, val hasNormParams: Boolean)
 
-    suspend fun process(groupId: Long): Result = withContext(Dispatchers.Default) {
+    suspend fun process(groupId: Long): Result {
         val samples = repository.samplesForGroup(groupId)
 
-        var featuresComputed = 0
-        for (s in samples) {
-            val ppg = s.ppg
-            val acc = s.acc
-            if (s.features != null || ppg == null || acc == null) continue
-            val bvpFloats = ppg.leFloats()
-            val accFloats = acc.leFloats()
-            if (bvpFloats.size != BVP_WINDOW || accFloats.size != ACC_WINDOW) continue
-            repository.storeFeatures(s.id, WindowFeatures.extract(bvpFloats, accFloats).leBytes())
-            featuresComputed++
+        val featureRows = mutableListOf<FloatArray>()
+        val signalWindows = mutableListOf<FloatArray>()
+        val computed = mutableListOf<Pair<Long, FloatArray>>()
+
+        withContext(Dispatchers.Default) {
+            for (s in samples) {
+                val bvp = s.ppg?.leFloats()?.takeIf { it.size == BVP_WINDOW }
+                if (bvp != null) signalWindows += bvp
+
+                var features = s.features?.leFloats()
+                if (features == null && bvp != null) {
+                    val acc = s.acc?.leFloats()?.takeIf { it.size == ACC_WINDOW }
+                    if (acc != null) {
+                        features = WindowFeatures.extract(bvp, acc)
+                        computed += s.id to features
+                    }
+                }
+                if (features != null) featureRows += features
+            }
         }
 
-        Result(featuresComputed)
+        for ((sampleId, features) in computed) {
+            repository.storeFeatures(sampleId, features.leBytes())
+        }
+
+        val featureStats = columnStats(featureRows, WindowFeatures.N_FEATURES)
+        repository.storeNormParams(groupId, featureStats, sampleStats(signalWindows))
+
+        return Result(computed.size, featureStats != null)
     }
 
     companion object {

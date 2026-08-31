@@ -40,7 +40,7 @@ private val timeFormat = SimpleDateFormat("MMM d HH:mm:ss", Locale.getDefault())
 /**
  * Manages stored captures: lists sample groups (captured or imported alike),
  * deletes them, and imports a subject dataset exported by
- * backend/scripts/export_subject_data.py. Independent of any BLE connection.
+ * backend/scripts/system/export_subject_data.py. Independent of any BLE connection.
  */
 @Composable
 fun CaptureScreen(modifier: Modifier = Modifier) {
@@ -104,10 +104,19 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
                         scope.launch {
                             try {
                                 val result = pipeline.process(group.groupId)
-                                status = "Group #${group.groupId}: +${result.featuresComputed} features"
+                                val norm = if (result.hasNormParams) "normalization parameters computed"
+                                           else "no complete window to normalize from"
+                                status = "Group #${group.groupId}: " +
+                                    "+${result.featuresComputed} features, $norm"
                             } catch (e: Exception) {
                                 status = "Processing failed: ${e.message}"
                             }
+                        }
+                    },
+                    onPick = {
+                        scope.launch {
+                            repository.pickForStaging(group.groupId)
+                            status = "Group #${group.groupId} will normalize the models you stage"
                         }
                     },
                     onDelete = { scope.launch { repository.deleteGroup(group.groupId) } },
@@ -118,7 +127,12 @@ fun CaptureScreen(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun GroupCard(group: GroupSummary, onProcess: () -> Unit, onDelete: () -> Unit) {
+private fun GroupCard(
+    group: GroupSummary,
+    onProcess: () -> Unit,
+    onPick: () -> Unit,
+    onDelete: () -> Unit,
+) {
     var confirming by remember { mutableStateOf(false) }
     Card {
         Column(
@@ -129,6 +143,13 @@ private fun GroupCard(group: GroupSummary, onProcess: () -> Unit, onDelete: () -
                 val started = timeFormat.format(Date(group.startedAt))
                 val ended = group.endedAt?.let { timeFormat.format(Date(it)) } ?: "active"
                 Text("Group #${group.groupId}", style = MaterialTheme.typography.titleMedium)
+                if (group.picked) {
+                    Text(
+                        "Normalization parameters selected for staging",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
                 Text(
                     "$started → $ended",
                     style = MaterialTheme.typography.bodySmall,
@@ -149,7 +170,13 @@ private fun GroupCard(group: GroupSummary, onProcess: () -> Unit, onDelete: () -
                 }
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(onClick = onProcess) { Text("Process") }
+                    // Once preprocessing has derived this group's norm params, the action
+                    // becomes picking them as the ones staged models are fed with.
+                    if (group.hasNormParams) {
+                        TextButton(onClick = onPick, enabled = !group.picked) { Text("Pick") }
+                    } else {
+                        TextButton(onClick = onProcess) { Text("Process") }
+                    }
                     TextButton(onClick = { confirming = true }) {
                         Text("Delete", color = MaterialTheme.colorScheme.error)
                     }

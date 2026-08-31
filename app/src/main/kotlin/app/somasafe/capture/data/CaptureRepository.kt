@@ -3,9 +3,16 @@ package app.somasafe.capture.data
 import android.content.Context
 import app.somasafe.bluetooth.domain.MlResult
 import app.somasafe.bluetooth.domain.PpgSample
+import app.somasafe.capture.domain.NormStats
+import app.somasafe.capture.domain.leBytes
+import app.somasafe.capture.domain.leFloats
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+
+/** One group's stored z-score parameters: the per-feature pair a staged model carries,
+ *  and the single BVP pair on-device training normalizes its windows with. */
+data class GroupNormParams(val groupId: Long, val features: NormStats?, val signal: NormStats?)
 
 /**
  * Storage layer for capture data: owns the [CaptureDatabase] and all reads/writes
@@ -26,6 +33,23 @@ class CaptureRepository(context: Context) {
     suspend fun endGroup(groupId: Long, endedAt: Long) = dao.endGroup(groupId, endedAt)
 
     suspend fun deleteGroup(groupId: Long) = dao.deleteGroup(groupId)
+
+    /** Store the z-score parameters preprocessing derived from a group's own windows. */
+    suspend fun storeNormParams(groupId: Long, features: NormStats?, signal: NormStats?) =
+        dao.setNormParams(
+            groupId,
+            features?.mean?.leBytes(), features?.std?.leBytes(),
+            signal?.mean?.leBytes(), signal?.std?.leBytes(),
+        )
+
+    suspend fun normParams(groupId: Long): GroupNormParams? = dao.group(groupId)?.normParams()
+
+    /** The parameters a model gets staged with: the picked group's, or — when nothing is
+     *  picked — the most recent preprocessed group's. Null when no group has any. */
+    suspend fun stagingNormParams(): GroupNormParams? = dao.stagingGroup()?.normParams()
+
+    suspend fun pickForStaging(groupId: Long) =
+        dao.pickGroup(groupId, System.currentTimeMillis())
 
     suspend fun mergePpg(groupId: Long, sample: PpgSample) = dbMutex.withLock {
         val existing = dao.findSample(groupId, sample.sequenceN)
@@ -107,6 +131,15 @@ class CaptureRepository(context: Context) {
             }
         }
     }
+
+    private fun SampleGroup.normParams() = GroupNormParams(
+        groupId = id,
+        features = stats(featureMean, featureStd),
+        signal = stats(signalMean, signalStd),
+    )
+
+    private fun stats(mean: ByteArray?, std: ByteArray?): NormStats? =
+        if (mean == null || std == null) null else NormStats(mean.leFloats(), std.leFloats())
 
     private companion object {
         const val WINDOW_MS = 8_000L

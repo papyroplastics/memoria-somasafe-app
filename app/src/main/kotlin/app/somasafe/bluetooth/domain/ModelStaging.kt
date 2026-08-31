@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import app.somasafe.backend.data.readTrainableBytes
 import app.somasafe.bluetooth.data.BleConnection
+import app.somasafe.capture.data.CaptureRepository
 import app.somasafe.training.domain.LiteRtModel
 import app.somasafe.training.domain.TensorInfo
 import kotlinx.coroutines.CoroutineScope
@@ -25,11 +26,13 @@ sealed interface ModelState {
 
 /**
  * Reads a stored quantized model, introspects its input/output tensor sizes, and
- * stages it onto the connected device over the ML client-buffer service.
+ * stages it onto the connected device over the ML client-buffer service, together with
+ * the wearer's own z-score parameters (the picked capture group's, see [CaptureRepository]).
  */
 class ModelStaging(
     private val context: Context,
     private val connection: BleConnection,
+    private val repository: CaptureRepository,
     private val scope: CoroutineScope,
 ) {
     private val _model = MutableStateFlow<ModelState>(ModelState.None)
@@ -41,10 +44,15 @@ class ModelStaging(
         scope.launch {
             _model.value = ModelState.Loading
             try {
-                // The payload (signature + contract version + norm params + tflite) is
-                // framed here per the BLE interface version; introspect the trainable
-                // model for the tensor sizes.
-                val bytes = withContext(Dispatchers.IO) { buildModelPayload(context, key) }
+                // The payload is framed here per the BLE interface version, carrying the
+                // wearer's own normalization parameters; the trainable model is
+                // introspected for the tensor sizes.
+                val norm = withContext(Dispatchers.IO) { repository.stagingNormParams() }
+                    ?: error("no normalization parameters — Process a capture on the " +
+                             "Captures tab, then Pick it")
+                val params = norm.features
+                    ?: error("capture group #${norm.groupId} has no feature normalization parameters")
+                val bytes = withContext(Dispatchers.IO) { buildModelPayload(context, key, params) }
                 val (featuresLen, scoreLen) =
                     withContext(Dispatchers.Default) { introspect(readTrainableBytes(context, key)) }
 
@@ -58,7 +66,8 @@ class ModelStaging(
                 }
 
                 _model.value = ModelState.Loaded(key, featuresLen, scoreLen)
-                onStatus("Model \"$key\" loaded (${bytes.size} bytes)")
+                onStatus("Model \"$key\" loaded (${bytes.size} bytes, "
+                    + "normalized by capture group #${norm.groupId})")
             } catch (e: Exception) {
                 Log.e(TAG, "model load failed", e)
                 _model.value = ModelState.Error(e.message ?: "load failed")

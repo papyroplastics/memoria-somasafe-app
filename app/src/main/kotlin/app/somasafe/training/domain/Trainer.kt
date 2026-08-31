@@ -8,6 +8,7 @@ import app.somasafe.backend.data.saveTrainedWeights
 import app.somasafe.backend.data.readTrainableBytes
 import app.somasafe.capture.data.CaptureRepository
 import app.somasafe.capture.domain.leFloats
+import app.somasafe.capture.domain.normalize
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -33,9 +34,10 @@ private fun sigParam(signature: String, param: String) = "${signature}_$param:0"
  * the original baseline forward.
  *
  * The autoencoder is self-supervised — its target is the input BVP — so the only model
- * input assembled per window is its raw BVP frame. Windows without signal are skipped;
- * the score/label is unused. The signal is fed raw — the trainable model z-scores it in
- * the train/eval signatures.
+ * input assembled per window is its BVP frame. Windows without signal are skipped; the
+ * score/label is unused. No model normalizes its own input any more, so each window is
+ * z-scored here with the capture group's own signal parameters (derived by preprocessing,
+ * so the group has to have been processed first).
  */
 class Trainer(private val context: Context, private val repository: CaptureRepository) {
 
@@ -44,11 +46,14 @@ class Trainer(private val context: Context, private val repository: CaptureRepos
         val prevTrained = loadTrainedWeights(context, modelKey)
         val prevBase = loadBaseWeights(context, modelKey)
 
+        val norm = repository.normParams(groupId)?.signal
+            ?: error("capture group #$groupId has no normalization parameters — Process it first")
+
         val samples = repository.samplesForGroup(groupId)
         val windows = samples.mapNotNull { s ->
             val ppg = s.ppg?.leFloats() ?: return@mapNotNull null
             if (ppg.size != BVP_LEN) return@mapNotNull null
-            ppg
+            norm.normalize(ppg)
         }
 
         return withContext(Dispatchers.Default) {

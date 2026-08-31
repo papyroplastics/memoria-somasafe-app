@@ -370,7 +370,8 @@ private fun ModelDownloadCard(
                 QuantizedRow(quantizedState, onDownloadQuantized)
                 UploadSection(
                     uploadState, submitState, weightsStatus,
-                    model.supportsQuantizeSubmit, onUploadQuantize, onSubmit,
+                    model.supportsQuantizeSubmit, model.supportsRawSubmit,
+                    onUploadQuantize, onSubmit,
                 )
             }
         }
@@ -448,9 +449,21 @@ private fun UploadSection(
     submitState: DownloadState,
     weightsStatus: WeightsStatus,
     supportsQuantizeSubmit: Boolean,
+    supportsRawSubmit: Boolean,
     onUploadQuantize: () -> Unit,
     onSubmit: () -> Unit,
 ) {
+    // A model the app has no submission client for (secure aggregation) offers neither
+    // path; its endpoints would 404.
+    if (!supportsQuantizeSubmit && !supportsRawSubmit) {
+        Text(
+            "Secure-aggregation model — the app has no client for its sealed rounds.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
+    }
+
     val (statusText, statusColor) = when (weightsStatus) {
         WeightsStatus.MISSING -> "No locally trained update" to MaterialTheme.colorScheme.onSurfaceVariant
         WeightsStatus.OUTDATED -> "Trained update: based on older weights" to MaterialTheme.colorScheme.primary
@@ -469,8 +482,10 @@ private fun UploadSection(
                 Text("Upload & quantize")
             }
         }
-        OutlinedButton(onClick = onSubmit, enabled = enabled && !busy) {
-            Text("Submit only")
+        if (supportsRawSubmit) {
+            OutlinedButton(onClick = onSubmit, enabled = enabled && !busy) {
+                Text("Submit only")
+            }
         }
     }
 
