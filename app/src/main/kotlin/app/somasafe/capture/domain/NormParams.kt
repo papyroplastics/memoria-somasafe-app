@@ -8,7 +8,7 @@ const val NORM_EPS = 1e-6f
  *  entry when the whole signal shares one mean/std (see [normalize]). */
 data class NormStats(val mean: FloatArray, val std: FloatArray)
 
-/** Column-wise stats over equally-sized rows (the 17-feature family). */
+/** Column-wise stats over equally-sized rows (the 20-feature family). */
 fun columnStats(rows: List<FloatArray>, width: Int): NormStats? {
     val used = rows.filter { it.size == width }
     if (used.isEmpty()) return null

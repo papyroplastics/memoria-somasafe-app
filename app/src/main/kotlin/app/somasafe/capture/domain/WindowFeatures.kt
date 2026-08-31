@@ -4,11 +4,12 @@ import com.github.psambit9791.jdsp.transform.DiscreteFourier
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.ln
 import kotlin.math.sqrt
 
 /**
  * On-device replica of `extract_features` (backend/ml/preprocessing.py) and
- * `ml_extract_features` (firmware/main/ml/features.c): the 17 raw (un-normalized)
+ * `ml_extract_features` (firmware/main/ml/features.c): the 20 raw (un-normalized)
  * features from one 8-second window — BVP (512 samples @ 64 Hz) and ACC (256
  * samples @ 32 Hz). Feature order:
  *   [0..6]  BVP: mean, std, min, max, range, rms, mean-abs-diff
@@ -16,16 +17,26 @@ import kotlin.math.sqrt
  *   [14]    BVP zero-crossing rate (mean-centred)
  *   [15]    BVP dominant frequency (Hz)
  *   [16]    BVP HR-band power ratio (0.7–3.5 Hz)
+ *   [17]    BVP pulse-band spectral centroid (Hz, 0.5–4.0 Hz)
+ *   [18]    BVP pulse-band spectral spread (Hz)
+ *   [19]    BVP log power ratio above the pulse band
  *
- * JDSP supplies the FFT for the two spectral features; the peak bin and the band
- * ratio are scale-invariant, so any magnitude scaling JDSP applies cancels out.
+ * JDSP supplies the FFT for the spectral features; the peak bin, the band ratios and
+ * the band moments are all scale-invariant, so any magnitude scaling JDSP applies
+ * cancels out.
  */
 object WindowFeatures {
-    const val N_FEATURES = 17
+    const val N_FEATURES = 20
     const val WINDOW_SECONDS = 8
     private const val BVP_RATE = 64
     private const val HR_BAND_LO_BIN = 6   // first bin >= 0.7 Hz (0.75 Hz at 0.125 Hz/bin)
     private const val HR_BAND_HI_BIN = 28  // 3.50 Hz
+
+    // Pulse band for the three shape features, 0.5-4.0 Hz = 30-240 bpm. Wider than the
+    // HR band above so a slowed rhythm still falls inside it.
+    private const val PULSE_BAND_LO_BIN = 4   // 0.50 Hz
+    private const val PULSE_BAND_HI_BIN = 32  // 4.00 Hz
+    private const val FEATURE_EPS = 1e-9
 
     fun extract(bvp: FloatArray, acc: FloatArray): FloatArray {
         val f = FloatArray(N_FEATURES)
@@ -50,18 +61,41 @@ object WindowFeatures {
         ft.transform()
         val mag = ft.getMagnitude(true)            // positive frequencies, length n/2 + 1
 
+        val binHz = BVP_RATE.toDouble() / n
         var total = 0.0
         var band = 0.0
+        var pulsePower = 0.0
+        var pulseWSum = 0.0
+        var pulseWSum2 = 0.0
+        var highPower = 0.0
         var peakBin = 1
         var peakPower = 0.0
         for (k in mag.indices) {
             val p = mag[k] * mag[k]
             total += p
             if (k in HR_BAND_LO_BIN..HR_BAND_HI_BIN) band += p
+            if (k in PULSE_BAND_LO_BIN..PULSE_BAND_HI_BIN) {
+                val freq = k * binHz
+                pulsePower += p
+                pulseWSum += p * freq
+                pulseWSum2 += p * freq * freq
+            } else if (k > PULSE_BAND_HI_BIN) {
+                highPower += p
+            }
             if (k > 0 && p > peakPower) { peakPower = p; peakBin = k }
         }
-        f[15] = peakBin.toFloat() * (BVP_RATE.toFloat() / n)
+        f[15] = (peakBin * binHz).toFloat()
         f[16] = (band / (total + 1e-8)).toFloat()
+
+        // Pulse-band shape. The centroid is the power-weighted mean in-band frequency and
+        // the spread its standard deviation, computed from the raw moments as
+        // sqrt(E[f²] - E[f]²) so the loop above needs only one pass.
+        val pulseTotal = pulsePower + FEATURE_EPS
+        val centroid = pulseWSum / pulseTotal
+        val variance = pulseWSum2 / pulseTotal - centroid * centroid
+        f[17] = centroid.toFloat()
+        f[18] = sqrt(variance.coerceAtLeast(0.0)).toFloat()
+        f[19] = ln(highPower / (total + FEATURE_EPS) + FEATURE_EPS).toFloat()
         return f
     }
 
