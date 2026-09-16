@@ -42,42 +42,25 @@ fun modelDir(context: Context, key: String): File = File(modelsDir(context), key
 
 fun metaFile(context: Context, key: String): File = File(modelDir(context, key), TRAINABLE_META_FILENAME)
 
-/** Trainable LiteRT model downloaded from the backend (has eval/train/save/restore).
- *  Carries the current global weights baked in — it is the weights source. */
 fun trainableFile(context: Context, key: String): File = File(modelDir(context, key), TRAINABLE_FILENAME)
 
-/** Int8-quantized model downloaded or produced by the backend; uploaded to the device. */
 fun quantizedFile(context: Context, key: String): File = File(modelDir(context, key), QUANTIZED_FILENAME)
 
-/** Signed fields delivered alongside the quantized model (`quantized.json`): the
- *  contract version and the server's ECDSA signature over the canonical bytes.
- *  Needed to assemble the device payload. */
 fun quantizedMetaFile(context: Context, key: String): File = File(modelDir(context, key), QUANTIZED_META_FILENAME)
 
-/** Baseline weights (`base_weights.bin`): the global snapshot on-device training
- *  started from, a raw LE float32 blob. Written only by on-device training. */
 fun baseWeightsFile(context: Context, key: String): File = File(modelDir(context, key), BASE_WEIGHTS_FILENAME)
 
-/** Absolute trained weights (`trained_weights.bin`), a raw LE float32 blob written
- *  only by on-device training; the upload delta is `trained − base`. */
 fun trainedWeightsFile(context: Context, key: String): File = File(modelDir(context, key), TRAINED_WEIGHTS_FILENAME)
 
-/** Downloaded artifacts are stored zstd-compressed exactly as the backend serves
- *  them (signatures cover the raw bytes); consumers decompress through the readers
- *  below rather than reading the files directly. */
 internal fun zstdDecompress(bytes: ByteArray): ByteArray =
     ZstdInputStream(ByteArrayInputStream(bytes)).use { it.readBytes() }
 
-/** Raw trainable `.tflite` bytes, decompressed. The only way to read the model. */
 fun readTrainableBytes(context: Context, key: String): ByteArray =
     zstdDecompress(trainableFile(context, key).readBytes())
 
-/** Raw quantized `.tflite` bytes, decompressed. The only way to read the model. */
 fun readQuantizedBytes(context: Context, key: String): ByteArray =
     zstdDecompress(quantizedFile(context, key).readBytes())
 
-/** Whether this app satisfies a model's `min_app_version` (dot-separated numeric
- *  parts, missing parts count as 0 — so "1.0" satisfies "1.0.0"). */
 fun versionAtLeast(local: String, required: String): Boolean {
     val a = local.split('.').map { it.toIntOrNull() ?: 0 }
     val b = required.split('.').map { it.toIntOrNull() ?: 0 }
@@ -111,12 +94,8 @@ data class RemoteModel(
 
     val appCompatible: Boolean get() = versionAtLeast(BuildConfig.VERSION_NAME, minAppVersion)
 
-    /** Whether the quantize upload path applies; a `raw` model 404s on it. */
     val supportsQuantizeSubmit: Boolean get() = submissionType == QUANTIZE_SUBMISSION
 
-    /** Whether the submit-only path applies. It takes the same dense delta body for both
-     *  `raw` and `quantize`; a `secure` model submits masked vectors through the sealed-round
-     *  endpoints instead, which the app has no client for. */
     val supportsRawSubmit: Boolean
         get() = submissionType == RAW_SUBMISSION || submissionType == QUANTIZE_SUBMISSION
 
@@ -159,12 +138,6 @@ fun saveModelMeta(context: Context, model: RemoteModel) {
 fun loadModelMeta(context: Context, key: String): RemoteModel? =
     runCatching { RemoteModel.fromJson(JSONObject(metaFile(context, key).readText())) }.getOrNull()
 
-/** The signed fields the backend delivers with a quantized model, persisted as
- *  `quantized.json`. [signature] is null only when the server ran without a key.
- *  [modelVersion] is the architecture `version` the quantized artifact was built
- *  against, so a later trainable re-download can tell the quantized artifact is
- *  stale; the quantize-result endpoint doesn't echo it (only the plain quantized
- *  download does), so callers on that path pass it in explicitly. */
 data class SignedModelMeta(
     val contractVersion: Int,
     val modelVersion: Int,
@@ -231,12 +204,6 @@ private fun rateLimitMessage(connection: HttpURLConnection): String {
     return if (retry != null) "Rate limited; retry in ${retry}s" else "Rate limited; try again later"
 }
 
-/**
- * Run an authenticated request against [url], attaching the stored bearer token.
- * On a `401` it refreshes the access token once and retries. [configure] sets
- * the method/body (re-run per attempt); [onSuccess] reads the 2xx response.
- * `429` is surfaced as a rate-limit error with the Retry-After hint.
- */
 internal suspend fun <T> authedRequest(
     context: Context,
     url: String,
@@ -275,17 +242,6 @@ suspend fun fetchModels(context: Context): Result<List<RemoteModel>> =
         List(array.length()) { i -> RemoteModel.fromJson(array.getJSONObject(i)) }
     }
 
-/**
- * Download the model's trainable artifact — the architecture with the current
- * global weights baked in — and record the snapshot it carries (`weights_id` /
- * timestamp headers) in `trainable.json`. The artifact always carries fresh
- * weights baked in, so any locally trained update is superseded regardless of
- * whether the version/fingerprint moved: `base_weights.bin` and
- * `trained_weights.bin` are always cleared. The quantized artifact is *not*
- * deleted — it is merely flagged stale (`quantStatus`, keyed off the
- * architecture version recorded in `quantized.json`) since it may still be a
- * valid personalized artifact for the previous architecture.
- */
 suspend fun downloadTrainable(context: Context, model: RemoteModel): Result<Unit> =
     authedRequest(context, model.trainableEndpoint) { connection ->
         val weightsId = connection.getHeaderField(WEIGHTS_ID_HEADER)?.toLong()
@@ -309,16 +265,6 @@ suspend fun downloadTrainable(context: Context, model: RemoteModel): Result<Unit
         ))
     }
 
-/**
- * Pull just the active weight buffer for a model whose trainable artifact is
- * already downloaded (same architecture, newer weights) — the lighter refresh
- * path for federated rounds where the graph didn't change. Overwrites
- * `base_weights.bin` with the freshly pulled snapshot and drops
- * `trained_weights.bin`: a locally trained update was computed against the old
- * snapshot and no longer applies. `trainable.json`'s `weights_id` /
- * `weights_version` are updated to match, since the delta upload reads the base
- * `weights_id` from there.
- */
 suspend fun downloadWeights(context: Context, model: RemoteModel): Result<Unit> =
     authedRequest(context, model.weightsEndpoint) { connection ->
         val weightsId = connection.getHeaderField(WEIGHTS_ID_HEADER)?.toLong()
@@ -351,7 +297,7 @@ suspend fun downloadQuantized(context: Context, model: RemoteModel): Result<Unit
         storeSignedModel(context, model.key, connection, model.version)
     }
 
-const val QUANTIZE_POLL_INTERVAL_MS = 1000L
+const val QUANTIZE_POLL_INTERVAL_MS = 5000L
 const val QUANTIZE_POLL_TIMEOUT_MS = 120_000L
 
 private fun HttpURLConnection.sendWeights(body: ByteArray) {
@@ -361,15 +307,6 @@ private fun HttpURLConnection.sendWeights(body: ByteArray) {
     outputStream.use { it.write(body) }
 }
 
-/**
- * Poll the quantize-result endpoint until the worker has produced the int8
- * model, storing it (with its signed header fields) as the model's quantized
- * artifact. `202` means still pending/running (keep waiting), `200` carries the
- * tflite, anything else (e.g. `422` failed) is an error. A `401` mid-poll
- * triggers a token refresh and the poll continues. [modelVersion] is recorded
- * in `quantized.json` since this endpoint (unlike the plain quantized download)
- * doesn't echo the architecture version in a header.
- */
 suspend fun pollQuantizeResult(context: Context, url: String, key: String, modelVersion: Int): Result<Unit> =
     withContext(Dispatchers.IO) {
         runCatching {
@@ -377,6 +314,7 @@ suspend fun pollQuantizeResult(context: Context, url: String, key: String, model
             val deadline = System.currentTimeMillis() + QUANTIZE_POLL_TIMEOUT_MS
             var done = false
             while (!done) {
+                val requestStart = System.currentTimeMillis()
                 val connection = URL(url).openConnection() as HttpURLConnection
                 val pending = try {
                     connection.setRequestProperty("Authorization", "Bearer $token")
@@ -391,7 +329,6 @@ suspend fun pollQuantizeResult(context: Context, url: String, key: String, model
                             token = refreshAccess(context).getOrElse { throw NotSignedInException() }
                             true
                         }
-                        429 -> error(rateLimitMessage(connection))
                         else -> {
                             val err = connection.errorStream?.bufferedReader()?.readText().orEmpty()
                             error("HTTP $code: $err")
@@ -402,18 +339,13 @@ suspend fun pollQuantizeResult(context: Context, url: String, key: String, model
                 }
                 if (pending) {
                     if (System.currentTimeMillis() >= deadline) error("quantization timed out")
-                    delay(QUANTIZE_POLL_INTERVAL_MS)
+                    val elapsed = System.currentTimeMillis() - requestStart
+                    delay((QUANTIZE_POLL_INTERVAL_MS - elapsed).coerceAtLeast(0))
                 }
             }
         }
     }
 
-/**
- * Upload the locally trained update as a weight delta (`trained − global`, LE
- * float32 body, base `weights_id` in the URL) as a federated update, then poll
- * for the personalized signed int8 artifact and store it as the model's
- * quantized artifact. Requires on-device training to have produced the weight blobs.
- */
 suspend fun uploadAndQuantize(context: Context, model: RemoteModel): Result<Unit> =
     withContext(Dispatchers.IO) {
         runCatching {
@@ -431,11 +363,6 @@ suspend fun uploadAndQuantize(context: Context, model: RemoteModel): Result<Unit
         }
     }
 
-/**
- * Submit-only federated update: the trained weight delta (`trained − global`) is
- * uploaded for aggregation and nothing comes back (validation happens server-side,
- * silently). Returns the submission id.
- */
 suspend fun submitOnly(context: Context, model: RemoteModel): Result<Long> =
     withContext(Dispatchers.IO) {
         runCatching {
