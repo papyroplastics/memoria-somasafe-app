@@ -7,8 +7,7 @@ import app.somasafe.backend.data.loadTrainedWeights
 import app.somasafe.backend.data.saveTrainedWeights
 import app.somasafe.backend.data.readTrainableBytes
 import app.somasafe.capture.data.CaptureRepository
-import app.somasafe.capture.domain.leFloats
-import app.somasafe.capture.domain.normalize
+import app.somasafe.training.domain.models.CAPTURE_MODELS
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -43,8 +42,9 @@ data class TrainMetrics(
     val batchSize: Int,
     val batches: Int,
     val scoredBatches: Int,
-    val errorBefore: Float,
-    val errorAfter: Float,
+    val statName: String,
+    val statBefore: Float,
+    val statAfter: Float,
     val meanLoss: Float,
     val lastLoss: Float,
     val updateNorm: Float,
@@ -59,15 +59,12 @@ data class TrainMetrics(
     val totalMs: Long get() = prepareMs + scoreBeforeMs + trainMs + scoreAfterMs + saveMs
     val scoreMs: Long get() = scoreBeforeMs + scoreAfterMs
     val msPerBatch: Long get() = if (batches > 0) trainMs / batches else 0
-    val errorChange: Float get() =
-        if (errorBefore > 0f) (errorAfter - errorBefore) / errorBefore * 100f else Float.NaN
+    val statChange: Float get() =
+        if (statBefore > 0f) (statAfter - statBefore) / statBefore * 100f else Float.NaN
 }
 
-private const val BVP_LEN = 512
 private const val TRAIN_SIGNATURE = "train"
 private const val EVAL_SIGNATURE = "eval"
-private const val SIGNAL_INPUT = "signal"
-private const val ERROR_OUTPUT = "error"
 private const val SCORE_BATCHES = 20
 
 /**
@@ -79,11 +76,10 @@ private const val SCORE_BATCHES = 20
  * saved as the baseline; later epochs restore the locally trained weights and carry
  * the original baseline forward.
  *
- * The autoencoder is self-supervised — its target is the input BVP — so the only model
- * input assembled per window is its BVP frame. Windows without signal are skipped; the
- * score/label is unused. No model normalizes its own input any more, so each window is
- * z-scored here with the capture group's own signal parameters (derived by preprocessing,
- * so the group has to have been processed first).
+ * Which capture columns feed the model, how they're normalized, and what the headline
+ * eval stat means are all model-specific — delegated to a [CaptureModelSpec] looked up
+ * by [CAPTURE_MODELS]; this class only owns the batch/train/score/save mechanics that
+ * are the same for every model.
  */
 class Trainer(private val context: Context, private val repository: CaptureRepository) {
 
@@ -112,25 +108,24 @@ class Trainer(private val context: Context, private val repository: CaptureRepos
             return ms
         }
 
+        val spec = CAPTURE_MODELS[modelKey]
+            ?: error("training not supported for model '$modelKey'")
         checkNotNull(loadModelMeta(context, modelKey)?.weightsId) { "model '$modelKey' not downloaded" }
         val prevTrained = loadTrainedWeights(context, modelKey)
         val prevBase = loadBaseWeights(context, modelKey)
 
-        val norm = repository.normParams(groupId)?.signal
+        val norm = repository.normParams(groupId)
             ?: error("capture group #$groupId has no normalization parameters — Process it first")
 
         val samples = repository.samplesForGroup(groupId)
-        val windows = samples.mapNotNull { s ->
-            val ppg = s.ppg?.leFloats() ?: return@mapNotNull null
-            if (ppg.size != BVP_LEN) return@mapNotNull null
-            norm.normalize(ppg)
-        }
+        val windows = spec.windows(samples, norm)
 
         return withContext(Dispatchers.Default) {
             LiteRtModel(readTrainableBytes(context, modelKey)).use { model ->
                 val info = model.describe()
-                val batchSize = trainBatchSize(info)
-                val errorIndex = evalErrorIndex(info)
+                val trainSig = signature(info, TRAIN_SIGNATURE)
+                val evalSig = signature(info, EVAL_SIGNATURE)
+                val batchSize = batchSizeOf(trainSig)
                 val batches = windows.size / batchSize
                 require(batches > 0) {
                     "no full batch of windows to train on (${windows.size} usable, batch size $batchSize)"
@@ -140,23 +135,24 @@ class Trainer(private val context: Context, private val repository: CaptureRepos
                 if (prevTrained != null) model.restoreWeights(prevTrained)
 
                 val scored = (0 until batches).shuffled().take(SCORE_BATCHES).sorted()
-                val scoreInput = flatten(scored.flatMap { b -> batchAt(windows, b, batchSize) })
+                val scoreWindows = scored.flatMap { b -> batchAt(windows, b, batchSize) }
                 val total = 2 * scored.size + batches
                 val prepareMs = lap()
 
                 currentCoroutineContext().ensureActive()
                 _state.value = TrainState.Running(TrainPhase.SCORING_BASELINE, 0, total, 0, batches)
-                val errorBefore = meanError(model, errorIndex, scoreInput)
+                val statBefore = scoreStat(model, evalSig, spec, scoreWindows)
                 val scoreBeforeMs = lap()
 
                 var lossSum = 0f
                 var lastLoss = Float.NaN
+                val trainParams = trainSig.inputs.map { it.paramName }
                 for (b in 0 until batches) {
                     currentCoroutineContext().ensureActive()
                     _state.value = TrainState.Running(
                         TrainPhase.TRAINING, scored.size + b, total, b + 1, batches,
                     )
-                    lastLoss = model.train(arrayOf(flatten(batchAt(windows, b, batchSize))), 1)
+                    lastLoss = model.train(inputsFor(batchAt(windows, b, batchSize), trainParams), 1)
                     lossSum += lastLoss
                 }
                 val trainMs = lap()
@@ -165,7 +161,7 @@ class Trainer(private val context: Context, private val repository: CaptureRepos
                 _state.value = TrainState.Running(
                     TrainPhase.SCORING_RESULT, scored.size + batches, total, batches, batches,
                 )
-                val errorAfter = meanError(model, errorIndex, scoreInput)
+                val statAfter = scoreStat(model, evalSig, spec, scoreWindows)
                 val scoreAfterMs = lap()
 
                 _state.value = TrainState.Running(TrainPhase.SAVING, total, total, batches, batches)
@@ -189,8 +185,9 @@ class Trainer(private val context: Context, private val repository: CaptureRepos
                     batchSize = batchSize,
                     batches = batches,
                     scoredBatches = scored.size,
-                    errorBefore = errorBefore,
-                    errorAfter = errorAfter,
+                    statName = spec.statName,
+                    statBefore = statBefore,
+                    statAfter = statAfter,
                     meanLoss = lossSum / batches,
                     lastLoss = lastLoss,
                     updateNorm = sqrt(squares).toFloat(),
@@ -206,31 +203,29 @@ class Trainer(private val context: Context, private val repository: CaptureRepos
         }
     }
 
-    private fun meanError(model: LiteRtModel, errorIndex: Int, input: FloatArray): Float =
-        model.runEval(arrayOf(input))[errorIndex].average().toFloat()
+    private fun scoreStat(
+        model: LiteRtModel, evalSig: SignatureInfo, spec: CaptureModelSpec, windows: List<WindowInputs>,
+    ): Float {
+        val inputs = inputsFor(windows, evalSig.inputs.map { it.paramName })
+        val outputs = evalSig.outputs.map { it.paramName }.zip(model.runEval(inputs).toList()).toMap()
+        return spec.stat(windows, outputs)
+    }
 
-    /** Batch size the train signature declares. Its sole input is the signal tensor. */
-    private fun trainBatchSize(info: ModelInfo): Int {
-        val sig = info.signatures.firstOrNull { it.key == TRAIN_SIGNATURE }
-            ?: error("model has no '$TRAIN_SIGNATURE' signature")
-        val signal = sig.inputs.singleOrNull()?.takeIf { it.paramName == SIGNAL_INPUT }
-            ?: error("train signature must take exactly one '$SIGNAL_INPUT' input")
-        val batch = signal.shape.firstOrNull() ?: -1
-        require(batch > 0) { "train signature has a non-fixed batch size" }
+    private fun signature(info: ModelInfo, key: String): SignatureInfo =
+        info.signatures.firstOrNull { it.key == key } ?: error("model has no '$key' signature")
+
+    private fun batchSizeOf(sig: SignatureInfo): Int {
+        val batch = sig.inputs.firstOrNull()?.shape?.firstOrNull() ?: -1
+        require(batch > 0) { "'${sig.key}' signature has a non-fixed batch size" }
         return batch
     }
 
-    private fun evalErrorIndex(info: ModelInfo): Int {
-        val sig = info.signatures.firstOrNull { it.key == EVAL_SIGNATURE }
-            ?: error("model has no '$EVAL_SIGNATURE' signature")
-        val index = sig.outputs.indexOfFirst { it.paramName == ERROR_OUTPUT }
-        require(index >= 0) { "eval signature has no '$ERROR_OUTPUT' output" }
-        return index
-    }
-
     private companion object {
-        fun batchAt(windows: List<FloatArray>, batch: Int, batchSize: Int): List<FloatArray> =
+        fun batchAt(windows: List<WindowInputs>, batch: Int, batchSize: Int): List<WindowInputs> =
             windows.subList(batch * batchSize, (batch + 1) * batchSize)
+
+        fun inputsFor(windows: List<WindowInputs>, paramNames: List<String>): Array<FloatArray> =
+            paramNames.map { name -> flatten(windows.map { it.getValue(name) }) }.toTypedArray()
 
         fun flatten(rows: List<FloatArray>): FloatArray {
             val width = rows.first().size

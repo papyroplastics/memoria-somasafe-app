@@ -10,8 +10,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/** One group's stored z-score parameters: the per-feature pair a staged model carries,
- *  and the single BVP pair on-device training normalizes its windows with. */
+/** One group's stored z-score parameters: the per-feature pair and the single BVP pair,
+ *  either of which on-device training may normalize its windows with, model-dependent. */
 data class GroupNormParams(val groupId: Long, val features: NormStats?, val signal: NormStats?)
 
 /**

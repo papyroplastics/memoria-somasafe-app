@@ -35,6 +35,7 @@ import app.somasafe.training.domain.TrainMetrics
 import app.somasafe.training.domain.TrainPhase
 import app.somasafe.training.domain.TrainState
 import app.somasafe.training.domain.Trainer
+import app.somasafe.training.domain.models.CAPTURE_MODELS
 
 /**
  * On-device training for one model: pick a processed capture group and run a local
@@ -58,6 +59,7 @@ fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {
 
     var job by remember(modelKey) { mutableStateOf<Job?>(null) }
 
+    val supported = CAPTURE_MODELS.containsKey(modelKey)
     val ready = meta?.weightsId != null
     val busy = state is TrainState.Preparing || state is TrainState.Running
 
@@ -72,6 +74,14 @@ fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {
 
         PrereqCard(hasModel = ready)
 
+        if (!supported) {
+            Text(
+                "Training not yet supported for this model.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+
         TrainProgress(state, onCancel = { job?.cancel() })
 
         if (groups.isEmpty()) {
@@ -83,7 +93,7 @@ fun TrainingScreen(modelKey: String, modifier: Modifier = Modifier) {
         } else {
             Text("Capture groups", style = MaterialTheme.typography.titleMedium)
             groups.forEach { group ->
-                GroupTrainCard(group, enabled = ready && !busy && group.hasNormParams) {
+                GroupTrainCard(group, enabled = supported && ready && !busy && group.hasNormParams) {
                     job = scope.launch { runCatching { trainer.trainEpoch(modelKey, group.groupId) } }
                 }
             }
@@ -152,9 +162,9 @@ private fun MetricsCard(metrics: TrainMetrics) {
                 style = MaterialTheme.typography.titleMedium,
             )
             MetricRow(
-                "Reconstruction error",
+                metrics.statName,
                 "%.4f → %.4f  (%+.1f%%)".format(
-                    metrics.errorBefore, metrics.errorAfter, metrics.errorChange,
+                    metrics.statBefore, metrics.statAfter, metrics.statChange,
                 ),
             )
             MetricRow(

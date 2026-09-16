@@ -16,3 +16,6 @@ internal fun FloatArray.leBytes(): ByteArray {
     for (v in this) buf.putFloat(v)
     return buf.array()
 }
+
+/** Raw int8 bytes (the capture schema's `score` layout) as floats, one per byte. */
+internal fun ByteArray.int8Floats(): FloatArray = FloatArray(size) { this[it].toFloat() }

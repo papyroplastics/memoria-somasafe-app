@@ -1,6 +1,6 @@
 # SomaSafe (Android Client)
 
-Android app that acts as the on-device federated learning client: it relays PPG/ACC data
+Android app that acts as the on-device federated learning client: it recieves PPG data
 from the ESP32 over BLE, runs local training with LiteRT, and shares only model updates
 with the server — the ESP32 never touches the internet directly, and raw signal never
 leaves the phone.
@@ -24,7 +24,7 @@ design. In short:
 - Jetpack Compose UI (Material 3) with per-tab navigation: a Bluetooth tab (scan, connect,
   firmware install), a Captures tab, and a Backend tab (sign-in, model/firmware
   management, training).
-- Full BLE relay to the firmware's contract — PPG/ACC streaming, model upload + staging,
+- Full BLE relay to the firmware's contract — PPG streaming, model upload + staging,
   device attestation, OTA firmware updates — mirroring `firmware/scripts/`; see
   [`shared/docs/ble-protocol.md`](../shared/docs/ble-protocol.md).
 - Capture storage (Room) and on-device preprocessing: recomputes missing features,
