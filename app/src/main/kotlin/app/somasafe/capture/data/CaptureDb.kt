@@ -65,7 +65,6 @@ data class Sample(
     val deviceStartMs: Long? = null, // on-device acquisition start (uptime ms)
     val deviceEndMs: Long? = null,   // on-device acquisition end (uptime ms)
     val ppg: ByteArray? = null,      // raw little-endian float32 PPG samples
-    val acc: ByteArray? = null,      // raw little-endian float32 ACC samples
     val features: ByteArray? = null, // raw little-endian float32 input features (echoed or computed on-device)
     val score: ByteArray? = null,    // int8 model output (from ML result)
 )
@@ -179,7 +178,7 @@ interface CaptureDao {
     fun groupSummaries(): Flow<List<GroupSummary>>
 }
 
-@Database(entities = [SampleGroup::class, Sample::class], version = 4, exportSchema = true)
+@Database(entities = [SampleGroup::class, Sample::class], version = 5, exportSchema = true)
 abstract class CaptureDatabase : RoomDatabase() {
     abstract fun captureDao(): CaptureDao
 

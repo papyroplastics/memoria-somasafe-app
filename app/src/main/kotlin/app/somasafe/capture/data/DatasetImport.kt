@@ -6,14 +6,13 @@ import com.google.protobuf.InvalidProtocolBufferException
 
 /** One imported window in the byte layout the capture schema stores. Fields are
  *  nullable to mirror real loss: a window may have signal data but no ML result
- *  (features/score null) or a result with no signal (ppg/acc and device timestamps
+ *  (features/score null) or a result with no signal (ppg and device timestamps
  *  null, like a result-only row). */
 data class ImportedWindow(
     val sequenceN: Long,
     val deviceStartMs: Long?,
     val deviceEndMs: Long?,
     val ppg: ByteArray?,
-    val acc: ByteArray?,
     val features: ByteArray?,
     val score: ByteArray?,
 )
@@ -29,7 +28,7 @@ data class ImportedDataset(
  *
  * Each window carries the recording-intrinsic metadata an ESP sample has (sequence
  * number, on-device start/end timestamps) plus whichever halves survived export:
- * raw little-endian float32 PPG/ACC/features and the int8 score. An empty payload
+ * raw little-endian float32 PPG/features and the int8 score. An empty payload
  * field means absent; missing windows simply leave a gap in the sequence numbers,
  * exactly like dropped captures.
  */
@@ -52,7 +51,6 @@ object DatasetImport {
                 deviceStartMs = if (w.hasDeviceStartMs()) w.deviceStartMs.toUInt().toLong() else null,
                 deviceEndMs = if (w.hasDeviceEndMs()) w.deviceEndMs.toUInt().toLong() else null,
                 ppg = w.ppg.bytesOrNull(),
-                acc = w.acc.bytesOrNull(),
                 features = w.features.bytesOrNull(),
                 score = w.score.bytesOrNull(),
             )

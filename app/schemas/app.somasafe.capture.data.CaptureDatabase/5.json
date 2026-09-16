@@ -1,8 +1,8 @@
 {
   "formatVersion": 1,
   "database": {
-    "version": 4,
-    "identityHash": "76a677a7eb9647e41fd2a4cec5b13ff7",
+    "version": 5,
+    "identityHash": "ae9c345f2e6a6735db6494b37d8bcab4",
     "entities": [
       {
         "tableName": "sample_groups",
@@ -68,7 +68,7 @@
       },
       {
         "tableName": "samples",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `groupId` INTEGER NOT NULL, `sequenceN` INTEGER NOT NULL, `receivedAt` INTEGER NOT NULL, `deviceStartMs` INTEGER, `deviceEndMs` INTEGER, `ppg` BLOB, `acc` BLOB, `features` BLOB, `score` BLOB, FOREIGN KEY(`groupId`) REFERENCES `sample_groups`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `groupId` INTEGER NOT NULL, `sequenceN` INTEGER NOT NULL, `receivedAt` INTEGER NOT NULL, `deviceStartMs` INTEGER, `deviceEndMs` INTEGER, `ppg` BLOB, `features` BLOB, `score` BLOB, FOREIGN KEY(`groupId`) REFERENCES `sample_groups`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "id",
@@ -109,12 +109,6 @@
           {
             "fieldPath": "ppg",
             "columnName": "ppg",
-            "affinity": "BLOB",
-            "notNull": false
-          },
-          {
-            "fieldPath": "acc",
-            "columnName": "acc",
             "affinity": "BLOB",
             "notNull": false
           },
@@ -167,7 +161,7 @@
     "views": [],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '76a677a7eb9647e41fd2a4cec5b13ff7')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'ae9c345f2e6a6735db6494b37d8bcab4')"
     ]
   }
 }

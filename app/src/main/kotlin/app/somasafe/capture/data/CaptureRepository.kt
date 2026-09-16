@@ -62,7 +62,6 @@ class CaptureRepository(context: Context) {
                     deviceStartMs = sample.deviceStartMs,
                     deviceEndMs = sample.deviceEndMs,
                     ppg = sample.ppg,
-                    acc = sample.acc,
                 )
             )
         } else {
@@ -71,7 +70,6 @@ class CaptureRepository(context: Context) {
                     deviceStartMs = sample.deviceStartMs,
                     deviceEndMs = sample.deviceEndMs,
                     ppg = sample.ppg,
-                    acc = sample.acc,
                 )
             )
         }
@@ -124,7 +122,6 @@ class CaptureRepository(context: Context) {
                     deviceStartMs = window.deviceStartMs,
                     deviceEndMs = window.deviceEndMs,
                     ppg = window.ppg,
-                    acc = window.acc,
                     features = window.features,
                     score = window.score,
                 )

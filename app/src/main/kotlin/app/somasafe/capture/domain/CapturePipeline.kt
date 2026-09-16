@@ -37,11 +37,8 @@ class CapturePipeline(private val repository: CaptureRepository) {
 
                 var features = s.features?.leFloats()
                 if (features == null && bvp != null) {
-                    val acc = s.acc?.leFloats()?.takeIf { it.size == ACC_WINDOW }
-                    if (acc != null) {
-                        features = WindowFeatures.extract(bvp, acc)
-                        computed += s.id to features
-                    }
+                    features = WindowFeatures.extract(bvp)
+                    computed += s.id to features
                 }
                 if (features != null) featureRows += features
             }
@@ -59,6 +56,5 @@ class CapturePipeline(private val repository: CaptureRepository) {
 
     companion object {
         private const val BVP_WINDOW = PpgService.PPG_PER_SEC * WindowFeatures.WINDOW_SECONDS  // 512
-        private const val ACC_WINDOW = PpgService.ACC_PER_SEC * WindowFeatures.WINDOW_SECONDS  // 256
     }
 }
